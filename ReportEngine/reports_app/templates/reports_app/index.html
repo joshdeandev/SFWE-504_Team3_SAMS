@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Scholarship Reports</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2em; }
+      .scholarship { border: 1px solid #ddd; padding: 1em; margin: 1em 0; border-radius: 4px; }
+      .stats { background: #f5f5f5; padding: 1em; margin: 1em 0; border-radius: 4px; }
+      .requirements { margin-left: 1em; }
+    </style>
+  </head>
+  <body>
+    <h1>Scholarship Report Summary</h1>
+    
+    <div style="margin: 1em 0;">
+      <h3>Export Report</h3>
+      <form method="post" style="display: inline-block;">
+        {% csrf_token %}
+        <input type="hidden" name="export_format" value="pdf">
+        <button type="submit">Export as PDF</button>
+      </form>
+      <form method="post" style="display: inline-block; margin-left: 1em;">
+        {% csrf_token %}
+        <input type="hidden" name="export_format" value="xlsx">
+        <button type="submit">Export as Excel</button>
+      </form>
+      <form method="post" style="display: inline-block; margin-left: 1em;">
+        {% csrf_token %}
+        <input type="hidden" name="export_format" value="csv">
+        <button type="submit">Export as CSV</button>
+      </form>
+    </div>
+    
+    <div class="stats">
+      <h2>Statistics</h2>
+      <p>Total Scholarships: {{ report.total_scholarships }}</p>
+      <p>Total Amount Available: ${{ report.total_amount|floatformat:2 }}</p>
+      
+      <h3>Frequency Distribution</h3>
+      <ul>
+        {% for frequency, count in report.frequency_distribution.items %}
+          <li>{{ frequency|title }}: {{ count }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <h2>Available Scholarships</h2>
+    {% for scholarship in report.scholarships %}
+      <div class="scholarship">
+        <h3>{{ scholarship.name }}</h3>
+        <p><strong>Description:</strong> {{ scholarship.description }}</p>
+        
+        <h4>Eligibility Criteria:</h4>
+        <ul class="requirements">
+          {% for criterion in scholarship.eligibility %}
+            <li>{{ criterion }}</li>
+          {% endfor %}
+        </ul>
+        
+        <h4>Donor Information:</h4>
+        <p>Name: {{ scholarship.donor.name }}<br>
+           Contact: {{ scholarship.donor.contact }}</p>
+        
+        <h4>Disbursement Requirements:</h4>
+        <ul class="requirements">
+          {% for req in scholarship.requirements %}
+            <li>{{ req }}</li>
+          {% endfor %}
+        </ul>
+        
+        <p><strong>Frequency:</strong> {{ scholarship.frequency|title }}</p>
+        <p><strong>Amount:</strong> ${{ scholarship.amount|floatformat:2 }}</p>
+        <p><strong>Deadline:</strong> {{ scholarship.deadline }}</p>
+      </div>
+    {% endfor %}
+  </body>
+</html>
