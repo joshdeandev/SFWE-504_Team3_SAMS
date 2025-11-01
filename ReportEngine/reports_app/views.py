@@ -30,6 +30,8 @@ class ApplicantData:
     academic_level: str = ""  # Freshman, Sophomore, Junior, Senior, Graduate
     expected_graduation: Optional[datetime] = None
     academic_history: List[Dict[str, Any]] = field(default_factory=list)  # Previous academic records
+    interview_notes: Optional[str] = None  # Notes from scholarship interview
+    committee_feedback: List[Dict[str, Any]] = field(default_factory=list)  # Feedback from selection committee
 
 @dataclass
 class ScholarshipAward:
@@ -467,7 +469,7 @@ class ReportEngine:
         """Add a new scholarship to the system."""
         self.scholarships.append(scholarship)
 
-    # Function to generate pre-screening report. Meets requirement for pre-screening applicants, SFWE504_3-LLR-7.
+    # Function to generate pre-screening report. Meets requirement for pre-screening applicants, SFWE504_3-LLR-7, SFWE504_3-LLR-25, SFWE504_3-LLR-26.
     def generate_prescreening_report(self, applicants: List[ApplicantData], scholarship_id: Optional[str] = None) -> Dict[str, Any]:
         """Generate a pre-screening report identifying applicants who meet scholarship eligibility criteria.
         
@@ -477,19 +479,37 @@ class ReportEngine:
             
         Returns:
             dict: Pre-screening report containing:
-                - Matched applicants per scholarship
-                - Eligibility analysis for each applicant
-                - Statistical summary of matches
+                - Qualified applicants list per scholarship
+                - Detailed eligibility analysis for each applicant
+                - Review scores and committee comments
+                - Application progress tracking
+                - Match statistics and summary
+                - Scholarship-specific requirements status
+                - Comprehensive applicant qualifications
         """
         report = {
             'generated_date': datetime.now(),
             'scholarships_evaluated': 0,
             'total_applicants': len(applicants),
             'matches': [],
+            'qualified_applicants': {},  # Dictionary to store qualified applicants per scholarship
+            'applicant_analysis': {},    # Detailed analysis of each applicant
+            'review_tracking': {},       # Track review scores and comments
+            'application_progress': {},   # Track application completion status
             'summary': {
                 'total_matches': 0,
                 'match_rate': 0.0,
-                'scholarships_with_matches': 0
+                'scholarships_with_matches': 0,
+                'qualification_distribution': {},  # Distribution of qualification rates
+                'review_statistics': {    # Statistics about review scores
+                    'average_scores': {},
+                    'review_completion_rate': 0.0
+                },
+                'application_completion': {  # Track overall application completion
+                    'complete': 0,
+                    'in_progress': 0,
+                    'incomplete': 0
+                }
             }
         }
         
@@ -499,68 +519,236 @@ class ReportEngine:
         
         for scholarship in scholarships_to_evaluate:
             scholarship_matches = []
+            qualified_applicants = []
+            qualification_scores = []  # Track qualification scores for distribution analysis
             
             for applicant in applicants:
                 eligibility_results = []
                 meets_all_criteria = True
+                criteria_met_count = 0
+                total_criteria = len(scholarship.eligibility_criteria)
                 
                 # Evaluate each eligibility criterion
                 for criterion in scholarship.eligibility_criteria:
                     is_met = False
                     reason = ""
+                    details = {}
                     
                     # Evaluate GPA requirements
                     if "GPA" in criterion:
                         required_gpa = float(criterion.split("+")[0].split()[-1])
                         is_met = applicant.gpa >= required_gpa
                         reason = f"GPA: {applicant.gpa:.2f} vs required {required_gpa}+"
+                        details = {
+                            'type': 'gpa',
+                            'required': required_gpa,
+                            'actual': applicant.gpa,
+                            'difference': applicant.gpa - required_gpa
+                        }
                     
                     # Evaluate major requirements
                     elif "major" in criterion.lower():
                         required_major = criterion.split("major")[0].strip()
                         is_met = required_major.lower() in applicant.major.lower()
                         reason = f"Major: {applicant.major} vs required {required_major}"
+                        details = {
+                            'type': 'major',
+                            'required': required_major,
+                            'actual': applicant.major,
+                            'exact_match': required_major.lower() == applicant.major.lower()
+                        }
                     
                     # Evaluate enrollment status
                     elif "enrollment" in criterion.lower():
                         # This would need to be enhanced with actual enrollment status data
                         is_met = True  # Assuming full-time enrollment for demo
                         reason = "Enrollment status verified"
+                        details = {
+                            'type': 'enrollment',
+                            'status': 'full-time',
+                            'verified': True
+                        }
                     
-                    # Add other criteria evaluations as needed
+                    # Track met criteria
+                    if is_met:
+                        criteria_met_count += 1
+                    
+                    # Add detailed evaluation results
                     eligibility_results.append({
                         'criterion': criterion,
                         'is_met': is_met,
-                        'reason': reason
+                        'reason': reason,
+                        'details': details
                     })
                     
                     if not is_met:
                         meets_all_criteria = False
                 
+                # Calculate qualification score
+                qualification_score = (criteria_met_count / total_criteria) * 100
+                qualification_scores.append(qualification_score)
+                
+                # Calculate application completion status
+                required_components = {
+                    'personal_info': bool(applicant.name and applicant.student_id),
+                    'academic_info': bool(applicant.major and applicant.academic_level),
+                    'essays': bool(applicant.essays),
+                    'financial_info': bool(applicant.financial_info),
+                    'academic_records': bool(applicant.academic_history)
+                }
+                completion_percentage = (sum(1 for v in required_components.values() if v) / len(required_components)) * 100
+                
+                # Determine application status
+                if completion_percentage == 100:
+                    application_status = 'complete'
+                elif completion_percentage > 50:
+                    application_status = 'in_progress'
+                else:
+                    application_status = 'incomplete'
+
+                # Get review scores and comments if available
+                review_data = {
+                    'academic_review': {
+                        'score': None,
+                        'comments': [],
+                        'reviewer': None,
+                        'date': None
+                    },
+                    'essay_review': {
+                        'scores': [],
+                        'comments': [],
+                        'reviewers': [],
+                        'dates': []
+                    },
+                    'interview_notes': None,
+                    'committee_feedback': []
+                }
+                
+                # Process essay evaluations if available
+                if hasattr(applicant, 'essays') and applicant.essays:
+                    for essay in applicant.essays:
+                        if hasattr(essay, 'evaluation'):
+                            review_data['essay_review']['scores'].append(essay.evaluation.get('score'))
+                            review_data['essay_review']['comments'].append(essay.evaluation.get('feedback'))
+                            review_data['essay_review']['reviewers'].append(essay.evaluation.get('reviewer'))
+                            review_data['essay_review']['dates'].append(essay.evaluation.get('date'))
+                
+                # Process interview notes if available
+                if hasattr(applicant, 'interview_notes'):
+                    review_data['interview_notes'] = applicant.interview_notes
+                
+                # Process committee feedback if available
+                if hasattr(applicant, 'committee_feedback'):
+                    review_data['committee_feedback'] = applicant.committee_feedback
+
+                # Prepare detailed applicant assessment
+                applicant_assessment = {
+                    'applicant': {
+                        'name': applicant.name,
+                        'student_id': applicant.student_id,
+                        'major': applicant.major,
+                        'gpa': applicant.gpa,
+                        'academic_level': applicant.academic_level
+                    },
+                    'qualification_score': qualification_score,
+                    'eligibility_details': eligibility_results,
+                    'criteria_met_count': criteria_met_count,
+                    'total_criteria': total_criteria,
+                    'fully_qualified': meets_all_criteria,
+                    'application_status': {
+                        'status': application_status,
+                        'completion_percentage': completion_percentage,
+                        'missing_components': [
+                            component for component, completed in required_components.items() 
+                            if not completed
+                        ]
+                    },
+                    'review_data': review_data
+                }
+                
                 if meets_all_criteria:
-                    scholarship_matches.append({
-                        'applicant': {
-                            'name': applicant.name,
-                            'student_id': applicant.student_id,
-                            'major': applicant.major,
-                            'gpa': applicant.gpa,
-                            'academic_level': applicant.academic_level
-                        },
-                        'eligibility_details': eligibility_results
+                    scholarship_matches.append(applicant_assessment)
+                    qualified_applicants.append({
+                        'applicant': applicant_assessment['applicant'],
+                        'qualification_score': qualification_score
                     })
+                
+                # Store detailed analysis for each applicant
+                if applicant.student_id not in report['applicant_analysis']:
+                    report['applicant_analysis'][applicant.student_id] = []
+                report['applicant_analysis'][applicant.student_id].append({
+                    'scholarship_name': scholarship.name,
+                    'assessment': applicant_assessment
+                })
             
             if scholarship_matches:
+                # Sort qualified applicants by qualification score
+                qualified_applicants.sort(key=lambda x: x['qualification_score'], reverse=True)
+                
                 report['matches'].append({
                     'scholarship_name': scholarship.name,
                     'description': scholarship.description,
                     'amount': scholarship.amount,
                     'deadline': scholarship.deadline,
-                    'matches': scholarship_matches
+                    'matches': scholarship_matches,
+                    'qualification_distribution': {
+                        'min_score': min(qualification_scores) if qualification_scores else 0,
+                        'max_score': max(qualification_scores) if qualification_scores else 0,
+                        'average_score': sum(qualification_scores) / len(qualification_scores) if qualification_scores else 0
+                    }
                 })
+                
+                # Store qualified applicants for this scholarship
+                report['qualified_applicants'][scholarship.name] = qualified_applicants
         
-        # Calculate summary statistics
+        # Calculate comprehensive summary statistics
         total_matches = sum(len(s['matches']) for s in report['matches'])
         scholarships_with_matches = len(report['matches'])
+        
+        # Calculate qualification distribution across all scholarships
+        all_qualification_scores = []
+        for scholarship in report['matches']:
+            all_qualification_scores.extend([match['qualification_score'] for match in scholarship['matches']])
+        
+        # Collect review statistics
+        review_scores = []
+        essay_scores = []
+        total_reviews = 0
+        completed_reviews = 0
+        
+        # Count application completion status
+        application_completion = {
+            'complete': 0,
+            'in_progress': 0,
+            'incomplete': 0
+        }
+        
+        for scholarship in report['matches']:
+            for match in scholarship['matches']:
+                # Track application status
+                status = match['application_status']['status']
+                application_completion[status] += 1
+                
+                # Track review completion
+                review_data = match['review_data']
+                if review_data['academic_review']['score'] is not None:
+                    review_scores.append(review_data['academic_review']['score'])
+                    completed_reviews += 1
+                
+                for essay_score in review_data['essay_review']['scores']:
+                    if essay_score is not None:
+                        essay_scores.append(essay_score)
+                        completed_reviews += 1
+                
+                total_reviews += 1  # Count expected reviews
+                if review_data['interview_notes']:
+                    completed_reviews += 1
+                total_reviews += 1  # Count interview as expected
+        
+        # Calculate average review scores
+        avg_review_score = sum(review_scores) / len(review_scores) if review_scores else 0
+        avg_essay_score = sum(essay_scores) / len(essay_scores) if essay_scores else 0
+        review_completion_rate = (completed_reviews / total_reviews) if total_reviews > 0 else 0
         
         report['summary'] = {
             'total_matches': total_matches,
@@ -569,7 +757,29 @@ class ReportEngine:
             'match_distribution': {
                 'scholarship_match_rate': (scholarships_with_matches / len(scholarships_to_evaluate)) if scholarships_to_evaluate else 0.0,
                 'average_matches_per_scholarship': (total_matches / len(scholarships_to_evaluate)) if scholarships_to_evaluate else 0.0
-            }
+            },
+            'qualification_distribution': {
+                'min_score': min(all_qualification_scores) if all_qualification_scores else 0,
+                'max_score': max(all_qualification_scores) if all_qualification_scores else 0,
+                'average_score': sum(all_qualification_scores) / len(all_qualification_scores) if all_qualification_scores else 0,
+                'score_ranges': {
+                    '90-100': len([s for s in all_qualification_scores if 90 <= s <= 100]),
+                    '80-89': len([s for s in all_qualification_scores if 80 <= s < 90]),
+                    '70-79': len([s for s in all_qualification_scores if 70 <= s < 80]),
+                    '60-69': len([s for s in all_qualification_scores if 60 <= s < 70]),
+                    'Below 60': len([s for s in all_qualification_scores if s < 60])
+                }
+            },
+            'review_statistics': {
+                'average_scores': {
+                    'academic_review': avg_review_score,
+                    'essay_review': avg_essay_score
+                },
+                'review_completion_rate': review_completion_rate,
+                'reviews_completed': completed_reviews,
+                'total_reviews_expected': total_reviews
+            },
+            'application_completion': application_completion
         }
         
         return report
@@ -598,8 +808,10 @@ class ReportEngine:
             ['Total Matches', str(report_data['summary']['total_matches'])],
             ['Match Rate', f"{report_data['summary']['match_rate']*100:.1f}%"],
             ['Scholarships with Matches', str(report_data['summary']['scholarships_with_matches'])],
-            ['Scholarship Match Rate', 
-             f"{report_data['summary']['match_distribution']['scholarship_match_rate']*100:.1f}%"]
+            ['Review Completion Rate', f"{report_data['summary']['review_statistics']['review_completion_rate']*100:.1f}%"],
+            ['Applications Complete', str(report_data['summary']['application_completion']['complete'])],
+            ['Applications In Progress', str(report_data['summary']['application_completion']['in_progress'])],
+            ['Applications Incomplete', str(report_data['summary']['application_completion']['incomplete'])]
         ]
         
         summary_table = Table(summary_data)
@@ -609,6 +821,14 @@ class ReportEngine:
             ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke)
         ]))
         story.append(summary_table)
+        story.append(Paragraph("<br/>", styles['Normal']))
+
+        # Review Statistics
+        story.append(Paragraph("Review Statistics", styles['Heading2']))
+        review_stats = report_data['summary']['review_statistics']
+        story.append(Paragraph(f"Average Academic Review Score: {review_stats['average_scores']['academic_review']:.1f}/10", styles['Normal']))
+        story.append(Paragraph(f"Average Essay Review Score: {review_stats['average_scores']['essay_review']:.1f}/10", styles['Normal']))
+        story.append(Paragraph(f"Reviews Completed: {review_stats['reviews_completed']} of {review_stats['total_reviews_expected']}", styles['Normal']))
         story.append(Paragraph("<br/>", styles['Normal']))
 
         # Matches by Scholarship
@@ -625,18 +845,31 @@ class ReportEngine:
                     styles['Normal']
                 ))
             
-            # Table of matching applicants
-            story.append(Paragraph("Matching Applicants:", styles['Heading3']))
-            applicant_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level']]
+            # Table of matching applicants with review scores
+            story.append(Paragraph("Qualified Applicants:", styles['Heading3']))
+            applicant_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Application Status', 'Review Score']]
             
             for match in scholarship_match['matches']:
                 applicant = match['applicant']
+                review_data = match.get('review_data', {})
+                application_status = match.get('application_status', {})
+                
+                # Calculate average review score
+                review_scores = []
+                if review_data.get('academic_review', {}).get('score'):
+                    review_scores.append(review_data['academic_review']['score'])
+                if review_data.get('essay_review', {}).get('scores'):
+                    review_scores.extend(review_data['essay_review']['scores'])
+                avg_review_score = sum(review_scores) / len(review_scores) if review_scores else 'N/A'
+                
                 applicant_data.append([
                     applicant['name'],
                     applicant['student_id'],
                     applicant['major'],
                     f"{applicant['gpa']:.2f}",
-                    applicant['academic_level']
+                    applicant['academic_level'],
+                    application_status.get('status', 'Unknown').title(),
+                    f"{avg_review_score:.1f}" if isinstance(avg_review_score, float) else avg_review_score
                 ])
             
             if len(applicant_data) > 1:
@@ -650,9 +883,173 @@ class ReportEngine:
                 ]))
                 story.append(applicant_table)
             
+            # Detailed Review Information
+            for match in scholarship_match['matches']:
+                applicant = match['applicant']
+                review_data = match.get('review_data', {})
+                story.append(Paragraph(f"\nDetailed Review for {applicant['name']}:", styles['Heading4']))
+                
+                # Essay Reviews
+                if review_data.get('essay_review', {}).get('comments'):
+                    story.append(Paragraph("Essay Reviews:", styles['Heading4']))
+                    for i, (comment, score) in enumerate(zip(
+                            review_data['essay_review']['comments'],
+                            review_data['essay_review']['scores']), 1):
+                        story.append(Paragraph(f"Essay {i} - Score: {score}/10", styles['Normal']))
+                        story.append(Paragraph(f"Feedback: {comment}", styles['Normal']))
+                
+                # Interview Notes
+                if review_data.get('interview_notes'):
+                    story.append(Paragraph("Interview Notes:", styles['Heading4']))
+                    story.append(Paragraph(review_data['interview_notes'], styles['Normal']))
+                
+                # Committee Feedback
+                if review_data.get('committee_feedback'):
+                    story.append(Paragraph("Committee Feedback:", styles['Heading4']))
+                    for feedback in review_data['committee_feedback']:
+                        story.append(Paragraph(
+                            f"• {feedback['member']}: {feedback['comments']}", 
+                            styles['Normal']
+                        ))
+            
             story.append(Paragraph("<br/>", styles['Normal']))
 
         doc.build(story)
+        return output_path
+
+    def export_prescreening_report_to_csv(self, applicants: List[ApplicantData],
+                                         scholarship_id: Optional[str] = None,
+                                         output_path: str = None) -> str:
+        """Export pre-screening report to CSV format.
+
+        Args:
+            applicants (List[ApplicantData]): List of applicants to evaluate
+            scholarship_id (str, optional): Specific scholarship to evaluate for
+            output_path (str): Path where to save the CSV file
+
+        Returns:
+            str: Path to the generated CSV file
+        """
+        report_data = self.generate_prescreening_report(applicants, scholarship_id)
+        
+        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            
+            # Write header and summary information
+            writer.writerow(['Pre-screening Report'])
+            writer.writerow(['Generated Date:', report_data['generated_date'].strftime('%Y-%m-%d %H:%M:%S')])
+            writer.writerow(['Total Applicants:', report_data['total_applicants']])
+            writer.writerow(['Total Matches:', report_data['summary']['total_matches']])
+            writer.writerow(['Match Rate:', f"{report_data['summary']['match_rate']*100:.1f}%"])
+            writer.writerow(['Scholarships with Matches:', report_data['summary']['scholarships_with_matches']])
+            writer.writerow([])
+            
+            # Write review statistics
+            writer.writerow(['Review Statistics'])
+            review_stats = report_data['summary']['review_statistics']
+            writer.writerow(['Average Academic Review Score:', f"{review_stats['average_scores']['academic_review']:.1f}/10"])
+            writer.writerow(['Average Essay Review Score:', f"{review_stats['average_scores']['essay_review']:.1f}/10"])
+            writer.writerow(['Reviews Completed:', review_stats['reviews_completed']])
+            writer.writerow(['Total Reviews Expected:', review_stats['total_reviews_expected']])
+            writer.writerow(['Review Completion Rate:', f"{review_stats['review_completion_rate']*100:.1f}%"])
+            writer.writerow([])
+            
+            # Write application completion statistics
+            writer.writerow(['Application Completion'])
+            completion_stats = report_data['summary']['application_completion']
+            writer.writerow(['Complete:', completion_stats['complete']])
+            writer.writerow(['In Progress:', completion_stats['in_progress']])
+            writer.writerow(['Incomplete:', completion_stats['incomplete']])
+            writer.writerow([])
+            
+            # Write detailed matches for each scholarship
+            writer.writerow(['Scholarship Matches'])
+            writer.writerow(['Scholarship Name', 'Applicant Name', 'Student ID', 'Major', 'GPA', 
+                           'Academic Level', 'Application Status', 'Qualification Score', 
+                           'Requirements Met', 'Requirements Pending', 'Review Score', 'Has Interview', 
+                           'Has Committee Feedback'])
+            
+            for match in report_data['matches']:
+                scholarship_name = match['scholarship_name']
+                for applicant_match in match['matches']:
+                    applicant = applicant_match['applicant']
+                    review_data = applicant_match['review_data']
+                    
+                    # Calculate average review score
+                    review_scores = []
+                    if review_data.get('academic_review', {}).get('score'):
+                        review_scores.append(review_data['academic_review']['score'])
+                    if review_data.get('essay_review', {}).get('scores'):
+                        review_scores.extend(review_data['essay_review']['scores'])
+                    avg_review_score = f"{sum(review_scores) / len(review_scores):.1f}" if review_scores else 'N/A'
+                    
+                    writer.writerow([
+                        scholarship_name,
+                        applicant['name'],
+                        applicant['student_id'],
+                        applicant['major'],
+                        f"{applicant['gpa']:.2f}",
+                        applicant['academic_level'],
+                        applicant_match['application_status']['status'].title(),
+                        f"{applicant_match['qualification_score']:.1f}%",
+                        '; '.join(applicant_match.get('criteria_met', [])),
+                        '; '.join(applicant_match.get('requirements_pending', [])),
+                        avg_review_score,
+                        'Yes' if review_data.get('interview_notes') else 'No',
+                        'Yes' if review_data.get('committee_feedback') else 'No'
+                    ])
+            writer.writerow([])
+            
+            # Write detailed review information
+            writer.writerow(['Detailed Reviews'])
+            writer.writerow(['Applicant Name', 'Student ID', 'Review Type', 'Score', 'Comments', 'Reviewer', 'Date'])
+            
+            for match in report_data['matches']:
+                for applicant_match in match['matches']:
+                    applicant = applicant_match['applicant']
+                    review_data = applicant_match['review_data']
+                    
+                    # Academic Review
+                    if review_data.get('academic_review', {}).get('score'):
+                        writer.writerow([
+                            applicant['name'],
+                            applicant['student_id'],
+                            'Academic Review',
+                            review_data['academic_review']['score'],
+                            review_data['academic_review'].get('comments', 'N/A'),
+                            review_data['academic_review'].get('reviewer', 'N/A'),
+                            review_data['academic_review'].get('date', 'N/A')
+                        ])
+                    
+                    # Essay Reviews
+                    for i, (score, comment, reviewer, date) in enumerate(zip(
+                            review_data['essay_review']['scores'],
+                            review_data['essay_review']['comments'],
+                            review_data['essay_review']['reviewers'],
+                            review_data['essay_review']['dates']
+                    ), 1):
+                        writer.writerow([
+                            applicant['name'],
+                            applicant['student_id'],
+                            f'Essay Review {i}',
+                            score,
+                            comment,
+                            reviewer,
+                            date.strftime('%Y-%m-%d') if date else 'N/A'
+                        ])
+                    
+                    # Committee Feedback
+                    for feedback in review_data.get('committee_feedback', []):
+                        writer.writerow([
+                            applicant['name'],
+                            applicant['student_id'],
+                            'Committee Feedback',
+                            feedback.get('recommendation', 'N/A'),
+                            feedback['comments'],
+                            feedback['member'],
+                            feedback.get('date', 'N/A')
+                        ])
+        
         return output_path
 
     def export_prescreening_report_to_excel(self, applicants: List[ApplicantData],
@@ -675,15 +1072,30 @@ class ReportEngine:
             ['Total Matches', report_data['summary']['total_matches']],
             ['Match Rate', f"{report_data['summary']['match_rate']*100:.1f}%"],
             ['Scholarships with Matches', report_data['summary']['scholarships_with_matches']],
-            ['Scholarship Match Rate', 
-             f"{report_data['summary']['match_distribution']['scholarship_match_rate']*100:.1f}%"]
+            ['Review Completion Rate', f"{report_data['summary']['review_statistics']['review_completion_rate']*100:.1f}%"],
+            ['Applications Complete', report_data['summary']['application_completion']['complete']],
+            ['Applications In Progress', report_data['summary']['application_completion']['in_progress']],
+            ['Applications Incomplete', report_data['summary']['application_completion']['incomplete']]
         ]
         
         for row_idx, (label, value) in enumerate(summary_data, 4):
             ws_summary[f'A{row_idx}'] = label
             ws_summary[f'B{row_idx}'] = value
+            
+        # Review Statistics
+        ws_summary['A12'] = "Review Statistics"
+        ws_summary['A12'].font = Font(bold=True)
+        review_stats = [
+            ['Average Academic Review Score', f"{report_data['summary']['review_statistics']['average_scores']['academic_review']:.1f}/10"],
+            ['Average Essay Review Score', f"{report_data['summary']['review_statistics']['average_scores']['essay_review']:.1f}/10"],
+            ['Reviews Completed', report_data['summary']['review_statistics']['reviews_completed']],
+            ['Total Reviews Expected', report_data['summary']['review_statistics']['total_reviews_expected']]
+        ]
+        for row_idx, (label, value) in enumerate(review_stats, 13):
+            ws_summary[f'A{row_idx}'] = label
+            ws_summary[f'B{row_idx}'] = value
         
-        # Matches Sheet
+        # Matches Sheet with Review Information
         for scholarship_match in report_data['matches']:
             ws_matches = wb.create_sheet(scholarship_match['scholarship_name'][:31])
             
@@ -697,22 +1109,109 @@ class ReportEngine:
             ws_matches['B4'] = (scholarship_match['deadline'].strftime('%Y-%m-%d') 
                               if scholarship_match['deadline'] else "No deadline set")
             
-            # Matching applicants
-            ws_matches['A6'] = "Matching Applicants"
-            headers = ['Name', 'Student ID', 'Major', 'GPA', 'Academic Level']
+            # Matching applicants with review scores
+            ws_matches['A6'] = "Qualified Applicants"
+            headers = ['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Application Status', 
+                      'Review Score', 'Essay Scores', 'Interview Complete', 'Committee Review']
             for col, header in enumerate(headers, 1):
                 cell = ws_matches.cell(row=7, column=col, value=header)
                 cell.font = Font(bold=True)
                 cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
             
-            for row, match in enumerate(scholarship_match['matches'], 8):
+            row = 8
+            for match in scholarship_match['matches']:
                 applicant = match['applicant']
+                review_data = match.get('review_data', {})
+                application_status = match.get('application_status', {})
+                
+                # Calculate average review score
+                review_scores = []
+                if review_data.get('academic_review', {}).get('score'):
+                    review_scores.append(review_data['academic_review']['score'])
+                if review_data.get('essay_review', {}).get('scores'):
+                    review_scores.extend(review_data['essay_review']['scores'])
+                avg_review_score = sum(review_scores) / len(review_scores) if review_scores else 'N/A'
+                
                 ws_matches.cell(row=row, column=1, value=applicant['name'])
                 ws_matches.cell(row=row, column=2, value=applicant['student_id'])
                 ws_matches.cell(row=row, column=3, value=applicant['major'])
                 ws_matches.cell(row=row, column=4, value=f"{applicant['gpa']:.2f}")
                 ws_matches.cell(row=row, column=5, value=applicant['academic_level'])
+                ws_matches.cell(row=row, column=6, value=application_status.get('status', 'Unknown').title())
+                ws_matches.cell(row=row, column=7, value=f"{avg_review_score:.1f}" if isinstance(avg_review_score, float) else avg_review_score)
+                ws_matches.cell(row=row, column=8, value=', '.join(f"{score:.1f}" for score in review_data.get('essay_review', {}).get('scores', [])) or 'N/A')
+                ws_matches.cell(row=row, column=9, value='Yes' if review_data.get('interview_notes') else 'No')
+                ws_matches.cell(row=row, column=10, value='Yes' if review_data.get('committee_feedback') else 'No')
+                row += 1
+                
+                # Add detailed review information
+                if review_data.get('interview_notes'):
+                    row += 1
+                    ws_matches.cell(row=row, column=1, value="Interview Notes:")
+                    ws_matches.cell(row=row, column=2, value=review_data['interview_notes'], colspan=8)
+                    row += 1
+                
+                if review_data.get('committee_feedback'):
+                    row += 1
+                    ws_matches.cell(row=row, column=1, value="Committee Feedback:")
+                    for feedback in review_data['committee_feedback']:
+                        row += 1
+                        ws_matches.cell(row=row, column=2, value=f"{feedback['member']}: {feedback['comments']}", colspan=8)
+                    row += 1
         
+            # Create Review Details Sheet for each scholarship
+            ws_reviews = wb.create_sheet(f"{scholarship_match['scholarship_name'][:20]}_Reviews")
+            ws_reviews['A1'] = f"Detailed Review Information for {scholarship_match['scholarship_name']}"
+            ws_reviews['A1'].font = Font(bold=True)
+            
+            row = 3
+            for match in scholarship_match['matches']:
+                applicant = match['applicant']
+                review_data = match.get('review_data', {})
+                
+                ws_reviews.cell(row=row, column=1, value=f"Review Details for {applicant['name']}")
+                ws_reviews.cell(row=row, column=1).font = Font(bold=True)
+                row += 2
+                
+                # Essay Reviews
+                if review_data.get('essay_review', {}).get('comments'):
+                    ws_reviews.cell(row=row, column=1, value="Essay Reviews")
+                    ws_reviews.cell(row=row, column=1).font = Font(bold=True)
+                    row += 1
+                    
+                    for i, (comment, score, reviewer, date) in enumerate(zip(
+                            review_data['essay_review']['comments'],
+                            review_data['essay_review']['scores'],
+                            review_data['essay_review']['reviewers'],
+                            review_data['essay_review']['dates']), 1):
+                        ws_reviews.cell(row=row, column=1, value=f"Essay {i}")
+                        ws_reviews.cell(row=row, column=2, value=f"Score: {score}/10")
+                        ws_reviews.cell(row=row+1, column=1, value="Reviewer:")
+                        ws_reviews.cell(row=row+1, column=2, value=reviewer)
+                        ws_reviews.cell(row=row+2, column=1, value="Date:")
+                        ws_reviews.cell(row=row+2, column=2, value=date.strftime('%Y-%m-%d') if date else 'N/A')
+                        ws_reviews.cell(row=row+3, column=1, value="Feedback:")
+                        ws_reviews.cell(row=row+3, column=2, value=comment)
+                        row += 5
+                
+                # Committee Feedback
+                if review_data.get('committee_feedback'):
+                    ws_reviews.cell(row=row, column=1, value="Committee Feedback")
+                    ws_reviews.cell(row=row, column=1).font = Font(bold=True)
+                    row += 1
+                    
+                    for feedback in review_data['committee_feedback']:
+                        ws_reviews.cell(row=row, column=1, value="Member:")
+                        ws_reviews.cell(row=row, column=2, value=feedback['member'])
+                        ws_reviews.cell(row=row+1, column=1, value="Comments:")
+                        ws_reviews.cell(row=row+1, column=2, value=feedback['comments'])
+                        if 'date' in feedback:
+                            ws_reviews.cell(row=row+2, column=1, value="Date:")
+                            ws_reviews.cell(row=row+2, column=2, value=feedback['date'].strftime('%Y-%m-%d'))
+                        row += 4
+                
+                row += 2  # Add space between applicants
+
         # Adjust column widths
         for ws in wb.worksheets:
             for col in ws.columns:
@@ -1214,7 +1713,7 @@ class ReportEngine:
 # View to handle report generation and exporting
 def home(request):
     # Create sample scholarship data (inline)
-    # Create sample applicant data
+    # Create sample applicant data with comprehensive review information
     john_doe = ApplicantData(
         name="John Doe",
         student_id="12345678",
@@ -1247,12 +1746,24 @@ def home(request):
             {
                 'prompt': 'Describe your career goals in engineering.',
                 'content': 'My passion for systems engineering stems from...',
-                'submission_date': datetime(2025, 2, 1)
+                'submission_date': datetime(2025, 2, 1),
+                'evaluation': {
+                    'score': 9.2,
+                    'feedback': 'Excellent vision and clear career trajectory.',
+                    'reviewer': 'Dr. Sarah Chen',
+                    'date': datetime(2025, 2, 15)
+                }
             },
             {
                 'prompt': 'How will this scholarship impact your education?',
                 'content': 'This scholarship will enable me to...',
-                'submission_date': datetime(2025, 2, 1)
+                'submission_date': datetime(2025, 2, 1),
+                'evaluation': {
+                    'score': 8.8,
+                    'feedback': 'Strong understanding of opportunity and impact.',
+                    'reviewer': 'Prof. Michael Roberts',
+                    'date': datetime(2025, 2, 16)
+                }
             }
         ],
         gpa=3.8,
@@ -1266,6 +1777,23 @@ def home(request):
                     {'code': 'CS210', 'name': 'Software Systems', 'grade': 'A-'}
                 ],
                 'gpa': 3.85
+            }
+        ],
+        interview_notes="Conducted on 2025-03-01. Demonstrated strong leadership potential and excellent communication skills. Shows clear understanding of systems engineering principles.",
+        committee_feedback=[
+            {
+                'member': 'Dr. James Wilson',
+                'role': 'Department Chair',
+                'comments': 'Outstanding candidate with proven academic excellence.',
+                'recommendation': 'Highly Recommend',
+                'date': datetime(2025, 3, 5)
+            },
+            {
+                'member': 'Prof. Lisa Martinez',
+                'role': 'Scholarship Committee Head',
+                'comments': 'Strong technical background and leadership potential.',
+                'recommendation': 'Strongly Recommend',
+                'date': datetime(2025, 3, 6)
             }
         ]
     )
@@ -1426,15 +1954,48 @@ def home(request):
                         raise ValueError(f"Unsupported export format for applicant report: {export_format}")
                     filename = f'applicant_report.{export_format}'
                 elif report_type == 'prescreening':
-                    # For demo purposes, we'll create a list of sample applicants
+                    # For demo purposes, we'll create a list of sample applicants with varying completion levels
                     sample_applicants = [
                         ApplicantData(
                             name="Alice Smith",
                             student_id="12346789",
                             netid="asmith",
                             major="Engineering",
+                            minor="Mathematics",
                             gpa=3.8,
-                            academic_level="Junior"
+                            academic_level="Junior",
+                            expected_graduation=datetime(2027, 5, 15),
+                            academic_history=[{
+                                'term': 'Fall 2024',
+                                'courses': [
+                                    {'code': 'ENG301', 'name': 'Advanced Engineering', 'grade': 'A'},
+                                    {'code': 'MATH400', 'name': 'Applied Mathematics', 'grade': 'A-'}
+                                ],
+                                'gpa': 3.8
+                            }],
+                            essays=[{
+                                'prompt': 'Describe your research interests.',
+                                'content': 'My research focuses on sustainable engineering...',
+                                'submission_date': datetime(2025, 2, 1),
+                                'evaluation': {
+                                    'score': 9.5,
+                                    'feedback': 'Exceptional research vision and clarity.',
+                                    'reviewer': 'Dr. Thompson',
+                                    'date': datetime(2025, 2, 10)
+                                }
+                            }],
+                            financial_info={
+                                'fafsa_submitted': True,
+                                'efc': 4000,
+                                'household_income': '40000-60000'
+                            },
+                            interview_notes="Outstanding interview performance. Shows great potential.",
+                            committee_feedback=[{
+                                'member': 'Dr. Rodriguez',
+                                'comments': 'Top candidate with excellent credentials.',
+                                'recommendation': 'Highly Recommend',
+                                'date': datetime(2025, 3, 1)
+                            }]
                         ),
                         ApplicantData(
                             name="Bob Johnson",
@@ -1442,7 +2003,24 @@ def home(request):
                             netid="bjohnson",
                             major="Computer Science",
                             gpa=3.2,
-                            academic_level="Sophomore"
+                            academic_level="Sophomore",
+                            essays=[{
+                                'prompt': 'Describe your programming experience.',
+                                'content': 'I have developed several applications...',
+                                'submission_date': datetime(2025, 2, 2),
+                                'evaluation': {
+                                    'score': 7.8,
+                                    'feedback': 'Good technical background, needs more detail.',
+                                    'reviewer': 'Prof. Chen',
+                                    'date': datetime(2025, 2, 12)
+                                }
+                            }],
+                            financial_info={
+                                'fafsa_submitted': True,
+                                'efc': 6000,
+                                'household_income': '60000-80000'
+                            }
+                            # Intentionally incomplete application
                         ),
                         ApplicantData(
                             name="Carol Williams",
@@ -1450,7 +2028,39 @@ def home(request):
                             netid="cwilliams",
                             major="Engineering",
                             gpa=3.6,
-                            academic_level="Senior"
+                            academic_level="Senior",
+                            expected_graduation=datetime(2026, 5, 15),
+                            academic_history=[{
+                                'term': 'Fall 2024',
+                                'courses': [
+                                    {'code': 'ENG401', 'name': 'Engineering Design', 'grade': 'A'},
+                                    {'code': 'ENG402', 'name': 'Project Management', 'grade': 'B+'}
+                                ],
+                                'gpa': 3.6
+                            }],
+                            essays=[{
+                                'prompt': 'Describe your leadership experience.',
+                                'content': 'As president of the Engineering Club...',
+                                'submission_date': datetime(2025, 2, 3),
+                                'evaluation': {
+                                    'score': 8.9,
+                                    'feedback': 'Strong leadership qualities demonstrated.',
+                                    'reviewer': 'Dr. Martinez',
+                                    'date': datetime(2025, 2, 14)
+                                }
+                            }],
+                            financial_info={
+                                'fafsa_submitted': True,
+                                'efc': 3000,
+                                'household_income': '30000-50000'
+                            },
+                            interview_notes="Great communication skills and project experience.",
+                            committee_feedback=[{
+                                'member': 'Prof. Anderson',
+                                'comments': 'Strong candidate with practical experience.',
+                                'recommendation': 'Recommend',
+                                'date': datetime(2025, 3, 2)
+                            }]
                         )
                     ]
                     
@@ -1466,6 +2076,12 @@ def home(request):
                             output_path=temp_file.name
                         )
                         content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    elif export_format == 'csv':
+                        output_path = engine.export_prescreening_report_to_csv(
+                            applicants=sample_applicants,
+                            output_path=temp_file.name
+                        )
+                        content_type = 'text/csv'
                     else:
                         raise ValueError(f"Unsupported export format for pre-screening report: {export_format}")
                     filename = f'prescreening_report.{export_format}'

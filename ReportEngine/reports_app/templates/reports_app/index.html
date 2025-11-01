@@ -242,6 +242,14 @@
               <i class="fa fa-file-excel-o"></i> Download Excel
             </button>
           </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="prescreening">
+            <input type="hidden" name="export_format" value="csv">
+            <button type="submit" value="csv">
+              <i class="fa fa-file-text-o"></i> Download CSV
+            </button>
+          </form>
         </div>
       </div>
       
