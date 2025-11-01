@@ -3,33 +3,210 @@
   <head>
     <meta charset="utf-8" />
     <title>Scholarship Reports</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <style>
       body { font-family: Arial, sans-serif; margin: 2em; }
       .scholarship { border: 1px solid #ddd; padding: 1em; margin: 1em 0; border-radius: 4px; }
       .stats { background: #f5f5f5; padding: 1em; margin: 1em 0; border-radius: 4px; }
       .requirements { margin-left: 1em; }
+      .export-section {
+        background: #e9ecef;
+        padding: 1.5em;
+        border-radius: 8px;
+        margin: 1em 0;
+      }
+      .export-section h3 {
+        margin-top: 0;
+        color: #2c3e50;
+      }
+      .export-buttons {
+        display: flex;
+        gap: 1em;
+      }
+      button {
+        padding: 0.5em 1em;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: background-color 0.2s;
+      }
+      button[value="pdf"] {
+        background-color: #dc3545;
+        color: white;
+      }
+      button[value="xlsx"] {
+        background-color: #28a745;
+        color: white;
+      }
+      button[value="csv"] {
+        background-color: #007bff;
+        color: white;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      .report-section {
+        background: white;
+        padding: 1em;
+        border-radius: 6px;
+        margin: 1em 0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+      .report-section h4 {
+        color: #2c3e50;
+        margin-top: 0;
+      }
+      .donor-form {
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+      }
+      .form-group {
+        display: flex;
+        gap: 1em;
+        align-items: center;
+      }
+      select {
+        padding: 0.5em;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        min-width: 200px;
+      }
+      .donor-section {
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+      }
+      .donor-export-buttons {
+        display: flex;
+        gap: 1em;
+        flex-wrap: wrap;
+      }
+      .donor-button {
+        min-width: 180px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5em;
+      }
+      .donor-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .donor-button.pdf-button {
+        background-color: #dc3545;
+      }
+      .donor-button.excel-button {
+        background-color: #28a745;
+      }
+      .donor-button.csv-button {
+        background-color: #007bff;
+      }
+      .donor-button i {
+        margin-right: 0.5em;
+      }
     </style>
   </head>
   <body>
     <h1>Scholarship Report Summary</h1>
     
-    <div style="margin: 1em 0;">
-      <h3>Export Report</h3>
-      <form method="post" style="display: inline-block;">
-        {% csrf_token %}
-        <input type="hidden" name="export_format" value="pdf">
-        <button type="submit">Export as PDF</button>
-      </form>
-      <form method="post" style="display: inline-block; margin-left: 1em;">
-        {% csrf_token %}
-        <input type="hidden" name="export_format" value="xlsx">
-        <button type="submit">Export as Excel</button>
-      </form>
-      <form method="post" style="display: inline-block; margin-left: 1em;">
-        {% csrf_token %}
-        <input type="hidden" name="export_format" value="csv">
-        <button type="submit">Export as CSV</button>
-      </form>
+    <div class="export-section">
+      <h3>Export Reports</h3>
+      
+      <!-- General Scholarship Report -->
+      <div class="report-section">
+        <h4>General Scholarship Report</h4>
+        <p>Download the complete scholarship report in your preferred format:</p>
+        <div class="export-buttons">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="general">
+            <input type="hidden" name="export_format" value="pdf">
+            <button type="submit" value="pdf">
+              <i class="fa fa-file-pdf-o"></i> Download PDF
+            </button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="general">
+            <input type="hidden" name="export_format" value="xlsx">
+            <button type="submit" value="xlsx">
+              <i class="fa fa-file-excel-o"></i> Download Excel
+            </button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="general">
+            <input type="hidden" name="export_format" value="csv">
+            <button type="submit" value="csv">
+              <i class="fa fa-file-text-o"></i> Download CSV
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Donor Report -->
+      <div class="report-section">
+        <h4>Donor/Sponsor Report</h4>
+        <p>Generate a detailed report for specific donors including key dates and post-award summaries:</p>
+        <div class="donor-section">
+          <select id="donor-select" required>
+            <option value="">Select Donor</option>
+            {% for scholarship in report.scholarships %}
+              <option value="{{ scholarship.donor.name }}">{{ scholarship.donor.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="donor-export-buttons">
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="donor">
+              <input type="hidden" name="export_format" value="pdf">
+              <input type="hidden" name="donor_name" class="donor-name-input">
+              <button type="submit" class="donor-button pdf-button">
+                <i class="fa fa-file-pdf-o"></i> Download PDF Report
+              </button>
+            </form>
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="donor">
+              <input type="hidden" name="export_format" value="xlsx">
+              <input type="hidden" name="donor_name" class="donor-name-input">
+              <button type="submit" class="donor-button excel-button">
+                <i class="fa fa-file-excel-o"></i> Download Excel Report
+              </button>
+            </form>
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="donor">
+              <input type="hidden" name="export_format" value="csv">
+              <input type="hidden" name="donor_name" class="donor-name-input">
+              <button type="submit" class="donor-button csv-button">
+                <i class="fa fa-file-text-o"></i> Download CSV Report
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+      
+      <script>
+        // Update all donor name inputs when donor is selected
+        document.getElementById('donor-select').addEventListener('change', function() {
+          const donorName = this.value;
+          const buttons = document.querySelectorAll('.donor-button');
+          const inputs = document.querySelectorAll('.donor-name-input');
+          
+          inputs.forEach(input => input.value = donorName);
+          buttons.forEach(button => {
+            button.disabled = !donorName;
+          });
+        });
+        
+        // Initialize buttons as disabled
+        document.querySelectorAll('.donor-button').forEach(button => {
+          button.disabled = true;
+        });
+      </script>
     </div>
     
     <div class="stats">
