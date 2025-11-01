@@ -872,5 +872,14 @@ def home(request):
                     print(f"Error cleaning up temporary file: {str(e)}")
     
     # Generate report for web display
-    report = engine.generate_scholarship_report()
-    return render(request, 'reports_app/index.html', {'report': report})
+    report_data = engine.generate_scholarship_report()
+    
+    # Convert scholarships data for template display
+    for scholarship in report_data['scholarships']:
+        # Ensure donor info is in the expected format
+        if isinstance(scholarship.get('donor'), dict):
+            scholarship['donor'] = scholarship['donor']
+        else:
+            scholarship['donor'] = {'name': 'Unknown', 'contact': 'Not provided'}
+    
+    return render(request, 'reports_app/index.html', {'report': report_data})
