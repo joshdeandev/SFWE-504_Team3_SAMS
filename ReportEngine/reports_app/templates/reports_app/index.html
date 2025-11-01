@@ -188,6 +188,62 @@
           </div>
         </div>
       </div>
+
+      <!-- Applicant Report -->
+      <div class="report-section">
+        <h4>Applicant Report</h4>
+        <p>Download detailed applicant data and statistics:</p>
+        <div class="export-buttons">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="applicant">
+            <input type="hidden" name="export_format" value="pdf">
+            <button type="submit" value="pdf">
+              <i class="fa fa-file-pdf-o"></i> Download PDF
+            </button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="applicant">
+            <input type="hidden" name="export_format" value="xlsx">
+            <button type="submit" value="xlsx">
+              <i class="fa fa-file-excel-o"></i> Download Excel
+            </button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="applicant">
+            <input type="hidden" name="export_format" value="csv">
+            <button type="submit" value="csv">
+              <i class="fa fa-file-text-o"></i> Download CSV
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Pre-screening Report -->
+      <div class="report-section">
+        <h4>Pre-screening Report</h4>
+        <p>Download a pre-screening report identifying applicants who meet scholarship eligibility criteria:</p>
+        <div class="export-buttons">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="prescreening">
+            <input type="hidden" name="export_format" value="pdf">
+            <button type="submit" value="pdf">
+              <i class="fa fa-file-pdf-o"></i> Download PDF
+            </button>
+          </form>
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="report_type" value="prescreening">
+            <input type="hidden" name="export_format" value="xlsx">
+            <button type="submit" value="xlsx">
+              <i class="fa fa-file-excel-o"></i> Download Excel
+            </button>
+          </form>
+        </div>
+      </div>
       
       <script>
         // Update all donor name inputs when donor is selected
