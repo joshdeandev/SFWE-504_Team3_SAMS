@@ -13,31 +13,16 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import csv
 import tempfile
+from .models import Applicant
 
 
-@dataclass
-class ApplicantData:
-    """Data class representing detailed applicant information."""
-    name: str
-    student_id: str
-    netid: str
-    major: str
-    minor: Optional[str] = None
-    academic_achievements: List[Dict[str, Any]] = field(default_factory=list)  # List of achievements with details
-    financial_info: Dict[str, Any] = field(default_factory=dict)  # Financial information
-    essays: List[Dict[str, str]] = field(default_factory=list)  # List of essay submissions with prompts
-    gpa: float = 0.0
-    academic_level: str = ""  # Freshman, Sophomore, Junior, Senior, Graduate
-    expected_graduation: Optional[datetime] = None
-    academic_history: List[Dict[str, Any]] = field(default_factory=list)  # Previous academic records
-    interview_notes: Optional[str] = None  # Notes from scholarship interview
-    committee_feedback: List[Dict[str, Any]] = field(default_factory=list)  # Feedback from selection committee
+# ApplicantData dataclass removed; use `Applicant` Django model in `reports_app.models`
 
 @dataclass
 class ScholarshipAward:
     """Data class representing a scholarship award to a specific applicant."""
     scholarship_name: str
-    applicant: ApplicantData  # Changed from applicant_name to full ApplicantData
+    applicant: Applicant  # Changed from applicant_name to full Applicant (DB-backed)
     award_date: datetime
     award_amount: float
     disbursement_dates: List[datetime]
@@ -470,11 +455,11 @@ class ReportEngine:
         self.scholarships.append(scholarship)
 
     # Function to generate pre-screening report. Meets requirement for pre-screening applicants, SFWE504_3-LLR-7, SFWE504_3-LLR-25, SFWE504_3-LLR-26.
-    def generate_prescreening_report(self, applicants: List[ApplicantData], scholarship_id: Optional[str] = None) -> Dict[str, Any]:
+    def generate_prescreening_report(self, applicants: List[Applicant], scholarship_id: Optional[str] = None) -> Dict[str, Any]:
         """Generate a pre-screening report identifying applicants who meet scholarship eligibility criteria.
         
         Args:
-            applicants (List[ApplicantData]): List of applicants to evaluate
+            applicants (List[Applicant]): List of applicants to evaluate
             scholarship_id (str, optional): Specific scholarship to evaluate for. If None, evaluate all scholarships.
             
         Returns:
@@ -784,7 +769,7 @@ class ReportEngine:
         
         return report
 
-    def export_prescreening_report_to_pdf(self, applicants: List[ApplicantData], 
+    def export_prescreening_report_to_pdf(self, applicants: List[Applicant], 
                                         scholarship_id: Optional[str] = None,
                                         output_path: str = None) -> str:
         """Export pre-screening report to PDF format."""
@@ -917,13 +902,13 @@ class ReportEngine:
         doc.build(story)
         return output_path
 
-    def export_prescreening_report_to_csv(self, applicants: List[ApplicantData],
+    def export_prescreening_report_to_csv(self, applicants: List[Applicant],
                                          scholarship_id: Optional[str] = None,
                                          output_path: str = None) -> str:
         """Export pre-screening report to CSV format.
 
         Args:
-            applicants (List[ApplicantData]): List of applicants to evaluate
+            applicants (List[Applicant]): List of applicants to evaluate
             scholarship_id (str, optional): Specific scholarship to evaluate for
             output_path (str): Path where to save the CSV file
 
@@ -1052,7 +1037,7 @@ class ReportEngine:
         
         return output_path
 
-    def export_prescreening_report_to_excel(self, applicants: List[ApplicantData],
+    def export_prescreening_report_to_excel(self, applicants: List[Applicant],
                                           scholarship_id: Optional[str] = None,
                                           output_path: str = None) -> str:
         """Export pre-screening report to Excel format."""
@@ -1226,6 +1211,23 @@ class ReportEngine:
         wb.save(output_path)
         return output_path
 
+    @staticmethod
+    def _parse_iso_dates(obj):
+        """Recursively convert ISO date strings back to datetime objects in a dict/list structure."""
+        from datetime import datetime
+        if isinstance(obj, str):
+            try:
+                return datetime.fromisoformat(obj.replace('Z', '+00:00'))
+            except ValueError:
+                return obj
+        if isinstance(obj, dict):
+            return {k: ReportEngine._parse_iso_dates(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [ReportEngine._parse_iso_dates(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(ReportEngine._parse_iso_dates(v) for v in obj)
+        return obj
+
     # Function to generate applicant report. Meets requirement SFWE504_3-LLR-6.
     def generate_applicant_report(self, student_id: str = None, netid: str = None) -> Dict[str, Any]:
         """Generate a comprehensive report of an applicant's data and scholarship status.
@@ -1273,7 +1275,7 @@ class ReportEngine:
         if not applicant_data:
             return None
 
-        # Compile comprehensive applicant report
+        # Compile comprehensive applicant report and parse any ISO date strings
         report = {
             'personal_info': {
                 'name': applicant_data.name,
@@ -1285,22 +1287,22 @@ class ReportEngine:
                 'minor': applicant_data.minor,
                 'gpa': applicant_data.gpa,
                 'academic_level': applicant_data.academic_level,
-                'expected_graduation': applicant_data.expected_graduation,
-                'academic_history': applicant_data.academic_history,
+                'expected_graduation': applicant_data.expected_graduation,  # This is already a date from model
+                'academic_history': self._parse_iso_dates(applicant_data.academic_history),
             },
-            'achievements': applicant_data.academic_achievements,
+            'achievements': self._parse_iso_dates(applicant_data.academic_achievements),
             'financial_info': applicant_data.financial_info,
             'essays': [{
                 'prompt': essay['prompt'],
-                'submission_date': essay['submission_date'],
+                'submission_date': self._parse_iso_dates(essay['submission_date']),
                 'content': essay['content']
             } for essay in applicant_data.essays],
             'scholarships': {
                 'total_awards': len(applicant_awards),
                 'total_amount': sum(award['award_amount'] for award in applicant_awards),
-                'active_awards': [award for award in applicant_awards if award['status'] == 'active'],
-                'completed_awards': [award for award in applicant_awards if award['status'] == 'completed'],
-                'detailed_awards': applicant_awards
+                'active_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'active']),
+                'completed_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'completed']),
+                'detailed_awards': self._parse_iso_dates(applicant_awards)
             }
         }
 
@@ -1710,17 +1712,27 @@ class ReportEngine:
         return output_path
 
 
+import logging
+
+logger = logging.getLogger('reports_app')
+
 # View to handle report generation and exporting
 def home(request):
+    """View to handle report generation and exporting.
+    Logs detailed debugging information about request processing and report generation.
+    """
+    logger.debug('Processing home request. Method: %s, POST data: %s', 
+                request.method, request.POST if request.method == 'POST' else 'N/A')
+
     # Create sample scholarship data (inline)
     # Create sample applicant data with comprehensive review information
-    john_doe = ApplicantData(
-        name="John Doe",
-        student_id="12345678",
-        netid="jdoe",
-        major="Systems Engineering",
-        minor="Computer Science",
-        academic_achievements=[
+    john_doe = Applicant.from_dict({
+        'name': "John Doe",
+        'student_id': "12345678",
+        'netid': "jdoe",
+        'major': "Systems Engineering",
+        'minor': "Computer Science",
+        'academic_achievements': [
             {
                 'type': 'Dean\'s List',
                 'date': datetime(2024, 12, 15),
@@ -1733,7 +1745,7 @@ def home(request):
                 'journal': 'Engineering Research Quarterly'
             }
         ],
-        financial_info={
+        'financial_info': {
             'fafsa_submitted': True,
             'efc': 5000,
             'household_income': '50000-75000',
@@ -1742,7 +1754,7 @@ def home(request):
                 {'type': 'State Grant', 'amount': 1500}
             ]
         },
-        essays=[
+        'essays': [
             {
                 'prompt': 'Describe your career goals in engineering.',
                 'content': 'My passion for systems engineering stems from...',
@@ -1766,10 +1778,10 @@ def home(request):
                 }
             }
         ],
-        gpa=3.8,
-        academic_level="Junior",
-        expected_graduation=datetime(2027, 5, 15),
-        academic_history=[
+        'gpa': 3.8,
+        'academic_level': "Junior",
+        'expected_graduation': datetime(2027, 5, 15),
+        'academic_history': [
             {
                 'term': 'Fall 2024',
                 'courses': [
@@ -1779,8 +1791,8 @@ def home(request):
                 'gpa': 3.85
             }
         ],
-        interview_notes="Conducted on 2025-03-01. Demonstrated strong leadership potential and excellent communication skills. Shows clear understanding of systems engineering principles.",
-        committee_feedback=[
+        'interview_notes': "Conducted on 2025-03-01. Demonstrated strong leadership potential and excellent communication skills. Shows clear understanding of systems engineering principles.",
+        'committee_feedback': [
             {
                 'member': 'Dr. James Wilson',
                 'role': 'Department Chair',
@@ -1796,7 +1808,7 @@ def home(request):
                 'date': datetime(2025, 3, 6)
             }
         ]
-    )
+    })
 
     sample_scholarships = [
         Scholarship(
@@ -1901,6 +1913,9 @@ def home(request):
         export_format = request.POST.get('export_format')
         report_type = request.POST.get('report_type', 'general')  # 'general' or 'donor'
         donor_name = request.POST.get('donor_name')
+        
+        logger.debug('Processing export request - Format: %s, Type: %s, Donor: %s',
+                    export_format, report_type, donor_name)
 
         if export_format:
             temp_file = None
@@ -1956,16 +1971,16 @@ def home(request):
                 elif report_type == 'prescreening':
                     # For demo purposes, we'll create a list of sample applicants with varying completion levels
                     sample_applicants = [
-                        ApplicantData(
-                            name="Alice Smith",
-                            student_id="12346789",
-                            netid="asmith",
-                            major="Engineering",
-                            minor="Mathematics",
-                            gpa=3.8,
-                            academic_level="Junior",
-                            expected_graduation=datetime(2027, 5, 15),
-                            academic_history=[{
+                        Applicant.from_dict({
+                            'name': "Alice Smith",
+                            'student_id': "12346789",
+                            'netid': "asmith",
+                            'major': "Engineering",
+                            'minor': "Mathematics",
+                            'gpa': 3.8,
+                            'academic_level': "Junior",
+                            'expected_graduation': datetime(2027, 5, 15),
+                            'academic_history': [{
                                 'term': 'Fall 2024',
                                 'courses': [
                                     {'code': 'ENG301', 'name': 'Advanced Engineering', 'grade': 'A'},
@@ -1973,7 +1988,7 @@ def home(request):
                                 ],
                                 'gpa': 3.8
                             }],
-                            essays=[{
+                            'essays': [{
                                 'prompt': 'Describe your research interests.',
                                 'content': 'My research focuses on sustainable engineering...',
                                 'submission_date': datetime(2025, 2, 1),
@@ -1984,27 +1999,27 @@ def home(request):
                                     'date': datetime(2025, 2, 10)
                                 }
                             }],
-                            financial_info={
+                            'financial_info': {
                                 'fafsa_submitted': True,
                                 'efc': 4000,
                                 'household_income': '40000-60000'
                             },
-                            interview_notes="Outstanding interview performance. Shows great potential.",
-                            committee_feedback=[{
+                            'interview_notes': "Outstanding interview performance. Shows great potential.",
+                            'committee_feedback': [{
                                 'member': 'Dr. Rodriguez',
                                 'comments': 'Top candidate with excellent credentials.',
                                 'recommendation': 'Highly Recommend',
                                 'date': datetime(2025, 3, 1)
                             }]
-                        ),
-                        ApplicantData(
-                            name="Bob Johnson",
-                            student_id="12347890",
-                            netid="bjohnson",
-                            major="Computer Science",
-                            gpa=3.2,
-                            academic_level="Sophomore",
-                            essays=[{
+                        }),
+                        Applicant.from_dict({
+                            'name': "Bob Johnson",
+                            'student_id': "12347890",
+                            'netid': "bjohnson",
+                            'major': "Computer Science",
+                            'gpa': 3.2,
+                            'academic_level': "Sophomore",
+                            'essays': [{
                                 'prompt': 'Describe your programming experience.',
                                 'content': 'I have developed several applications...',
                                 'submission_date': datetime(2025, 2, 2),
@@ -2015,22 +2030,21 @@ def home(request):
                                     'date': datetime(2025, 2, 12)
                                 }
                             }],
-                            financial_info={
+                            'financial_info': {
                                 'fafsa_submitted': True,
                                 'efc': 6000,
                                 'household_income': '60000-80000'
                             }
-                            # Intentionally incomplete application
-                        ),
-                        ApplicantData(
-                            name="Carol Williams",
-                            student_id="12348901",
-                            netid="cwilliams",
-                            major="Engineering",
-                            gpa=3.6,
-                            academic_level="Senior",
-                            expected_graduation=datetime(2026, 5, 15),
-                            academic_history=[{
+                        }),
+                        Applicant.from_dict({
+                            'name': "Carol Williams",
+                            'student_id': "12348901",
+                            'netid': "cwilliams",
+                            'major': "Engineering",
+                            'gpa': 3.6,
+                            'academic_level': "Senior",
+                            'expected_graduation': datetime(2026, 5, 15),
+                            'academic_history': [{
                                 'term': 'Fall 2024',
                                 'courses': [
                                     {'code': 'ENG401', 'name': 'Engineering Design', 'grade': 'A'},
@@ -2038,7 +2052,7 @@ def home(request):
                                 ],
                                 'gpa': 3.6
                             }],
-                            essays=[{
+                            'essays': [{
                                 'prompt': 'Describe your leadership experience.',
                                 'content': 'As president of the Engineering Club...',
                                 'submission_date': datetime(2025, 2, 3),
@@ -2049,19 +2063,19 @@ def home(request):
                                     'date': datetime(2025, 2, 14)
                                 }
                             }],
-                            financial_info={
+                            'financial_info': {
                                 'fafsa_submitted': True,
                                 'efc': 3000,
                                 'household_income': '30000-50000'
                             },
-                            interview_notes="Great communication skills and project experience.",
-                            committee_feedback=[{
+                            'interview_notes': "Great communication skills and project experience.",
+                            'committee_feedback': [{
                                 'member': 'Prof. Anderson',
                                 'comments': 'Strong candidate with practical experience.',
                                 'recommendation': 'Recommend',
                                 'date': datetime(2025, 3, 2)
                             }]
-                        )
+                        })
                     ]
                     
                     if export_format == 'pdf':
