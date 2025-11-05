@@ -182,3 +182,74 @@ class ScholarshipAward(models.Model):
             committee_feedback=committee_feedback,
             notes=data.get('notes')
         )
+
+
+class Scholarship(models.Model):
+    """Django model representing a scholarship with all relevant details.
+    
+    Complex data (criteria, requirements, schedules) stored as JSON for flexibility.
+    """
+    name = models.CharField(max_length=255)
+    description = models.TextField()
+    eligibility_criteria = models.JSONField(default=list)  # List[str]
+    donor_info = models.JSONField(default=dict)  # Dict containing donor details
+    disbursement_requirements = models.JSONField(default=list)  # List[str]
+    frequency = models.CharField(max_length=64)  # e.g., 'annual', 'semester'
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    deadline = models.DateTimeField(null=True, blank=True)
+    review_dates = models.JSONField(null=True, blank=True)  # List[datetime] as ISO strings
+    reporting_schedule = models.JSONField(null=True, blank=True)  # Dict[str, datetime] as ISO strings
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'Scholarship'
+        verbose_name_plural = 'Scholarships'
+    
+    def __str__(self):
+        return f"{self.name} ({self.amount:,.2f}/year)"
+    
+    @classmethod
+    def from_dict(cls, data: dict):
+        """Create a Scholarship from a dictionary (compatible with old dataclass format).
+        
+        Handles datetime serialization for JSON fields.
+        """
+        # Sanitize dates for JSON storage
+        deadline = data.get('deadline')
+        if deadline and isinstance(deadline, (str, datetime)):
+            if isinstance(deadline, str):
+                deadline = datetime.fromisoformat(deadline)
+            if deadline.tzinfo is None:
+                deadline = timezone.make_aware(deadline)
+        
+        # Convert review dates to ISO strings
+        review_dates = data.get('review_dates', [])
+        if review_dates:
+            review_dates = [
+                d.isoformat() if isinstance(d, datetime) else d
+                for d in review_dates
+            ]
+        
+        # Convert reporting schedule dates to ISO strings
+        reporting_schedule = data.get('reporting_schedule', {})
+        if reporting_schedule:
+            reporting_schedule = {
+                k: (v.isoformat() if isinstance(v, datetime) else v)
+                for k, v in reporting_schedule.items()
+            }
+        
+        return cls.objects.create(
+            name=data['name'],
+            description=data['description'],
+            eligibility_criteria=data.get('eligibility_criteria', []),
+            donor_info=data.get('donor_info', {}),
+            disbursement_requirements=data.get('disbursement_requirements', []),
+            frequency=data['frequency'],
+            amount=data['amount'],
+            deadline=deadline,
+            review_dates=review_dates,
+            reporting_schedule=reporting_schedule
+        )

@@ -13,25 +13,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import csv
 import tempfile
-from .models import Applicant, ScholarshipAward
+from .models import Applicant, ScholarshipAward, Scholarship
 import json
 from django.utils import timezone
-
-
-@dataclass
-class Scholarship:
-    """Data class representing a scholarship with all relevant details."""
-    name: str
-    description: str
-    eligibility_criteria: List[str]
-    donor_info: dict
-    disbursement_requirements: List[str]
-    frequency: str
-    amount: float
-    deadline: Optional[datetime] = None
-    review_dates: List[datetime] = None  # Dates for periodic review
-    reporting_schedule: Dict[str, datetime] = None  # Schedule for required reports
-    awards: List[Any] = None  # List of awards made under this scholarship, using Django model instances
 
 
 class ReportEngine:
@@ -1846,99 +1830,104 @@ def home(request):
         ]
     })
 
-    sample_scholarships = [
-        Scholarship(
-            name="Engineering Excellence Scholarship",
-            description="Merit-based scholarship for outstanding engineering students",
-            eligibility_criteria=[
-                "3.5+ GPA",
-                "Engineering major",
-                "Full-time enrollment"
-            ],
-            donor_info={
-                'name': 'Engineering Industry Association',
-                'contact': 'donor@example.com'
+    # Create sample scholarships
+    # First scholarship with an award
+    engineering_scholarship = Scholarship.objects.create(
+        name="Engineering Excellence Scholarship",
+        description="Merit-based scholarship for outstanding engineering students",
+        eligibility_criteria=[
+            "3.5+ GPA",
+            "Engineering major",
+            "Full-time enrollment"
+        ],
+        donor_info={
+            'name': 'Engineering Industry Association',
+            'contact': 'donor@example.com'
+        },
+        disbursement_requirements=[
+            "Maintain 3.5 GPA",
+            "Submit semester progress report"
+        ],
+        frequency="annual",
+        amount=5000.00,
+        deadline=timezone.make_aware(datetime(2026, 3, 15)),
+        review_dates=[
+            timezone.make_aware(datetime(2026, 1, 15)).isoformat(),  # Mid-year review
+            timezone.make_aware(datetime(2026, 6, 15)).isoformat()   # End-year review
+        ],
+        reporting_schedule={
+            'Progress Report': timezone.make_aware(datetime(2026, 4, 15)).isoformat(),
+            'Financial Report': timezone.make_aware(datetime(2026, 7, 15)).isoformat()
+        }
+    )
+    
+    # Create the scholarship award
+    ScholarshipAward.objects.create(
+        scholarship_name=engineering_scholarship.name,
+        applicant=john_doe,  # Using the Applicant model instance
+        award_date=timezone.make_aware(datetime(2025, 8, 15)),
+        award_amount=5000.00,
+        disbursement_dates=[
+            timezone.make_aware(datetime(2025, 9, 1)).isoformat(),
+            timezone.make_aware(datetime(2026, 1, 1)).isoformat()
+        ],
+        requirements_met=[
+            "Enrollment verification",
+            "First semester GPA requirement"
+        ],
+        requirements_pending=[
+            "Second semester progress report",
+            "Community service hours"
+        ],
+        status="active",
+        performance_metrics={
+            'current_gpa': 3.8,
+            'credits_completed': 15,
+            'service_hours': 20
+        },
+        essays_evaluation=[
+            {
+                'prompt': 'Career Goals',
+                'score': 9,
+                'feedback': 'Excellent clarity and vision'
             },
-            disbursement_requirements=[
-                "Maintain 3.5 GPA",
-                "Submit semester progress report"
-            ],
-            frequency="annual",
-            amount=5000.00,
-            deadline=datetime(2026, 3, 15),
-            review_dates=[
-                datetime(2026, 1, 15),  # Mid-year review
-                datetime(2026, 6, 15)   # End-year review
-            ],
-            reporting_schedule={
-                'Progress Report': datetime(2026, 4, 15),
-                'Financial Report': datetime(2026, 7, 15)
-            },
-            awards=[
-                    ScholarshipAward.objects.create(
-                        scholarship_name="Engineering Excellence Scholarship",
-                        applicant=john_doe,  # Using the Applicant model instance
-                        award_date=timezone.make_aware(datetime(2025, 8, 15)),
-                        award_amount=5000.00,
-                        disbursement_dates=json.dumps([d.isoformat() for d in [
-                            datetime(2025, 9, 1),
-                            datetime(2026, 1, 1)
-                        ]]),
-                        requirements_met=json.dumps([
-                            "Enrollment verification",
-                            "First semester GPA requirement"
-                        ]),
-                        requirements_pending=json.dumps([
-                            "Second semester progress report",
-                            "Community service hours"
-                        ]),
-                        status="active",
-                        performance_metrics=json.dumps({
-                            'current_gpa': 3.8,
-                            'credits_completed': 15,
-                            'service_hours': 20
-                        }),
-                        essays_evaluation=json.dumps([
-                            {
-                                'prompt': 'Career Goals',
-                                'score': 9,
-                                'feedback': 'Excellent clarity and vision'
-                            },
-                            {
-                                'prompt': 'Impact',
-                                'score': 8,
-                                'feedback': 'Strong understanding of opportunity'
-                            }
-                        ]),
-                        interview_notes="Strong candidate with clear goals and excellent communication skills",
-                        committee_feedback=json.dumps([
-                            {'member': 'Dr. Smith', 'comments': 'Highly recommended'},
-                            {'member': 'Prof. Johnson', 'comments': 'Outstanding potential'}
-                        ])
-                    )
-            ]
-        ),
-        Scholarship(
-            name="CS Leadership Scholarship",
-            description="For computer science students demonstrating leadership",
-            eligibility_criteria=[
-                "3.0+ GPA",
-                "Computer Science major",
-                "Leadership role in student organization"
-            ],
-            donor_info={
-                'name': 'Tech Leaders Foundation',
-                'contact': 'foundation@techleaders.org'
-            },
-            disbursement_requirements=[
-                "Maintain leadership position",
-                "Submit leadership impact report"
-            ],
-            frequency="semester",
-            amount=3000.00,
-            deadline=datetime(2026, 2, 1)
-        )
-    ]
+            {
+                'prompt': 'Impact',
+                'score': 8,
+                'feedback': 'Strong understanding of opportunity'
+            }
+        ],
+        interview_notes="Strong candidate with clear goals and excellent communication skills",
+        committee_feedback=[
+            {'member': 'Dr. Smith', 'comments': 'Highly recommended'},
+            {'member': 'Prof. Johnson', 'comments': 'Outstanding potential'}
+        ]
+    )
+
+    # Second scholarship
+    cs_scholarship = Scholarship.objects.create(
+        name="CS Leadership Scholarship",
+        description="For computer science students demonstrating leadership",
+        eligibility_criteria=[
+            "3.0+ GPA",
+            "Computer Science major",
+            "Leadership role in student organization"
+        ],
+        donor_info={
+            'name': 'Tech Leaders Foundation',
+            'contact': 'foundation@techleaders.org'
+        },
+        disbursement_requirements=[
+            "Maintain leadership position",
+            "Submit leadership impact report"
+        ],
+        frequency="semester",
+        amount=3000.00,
+        deadline=timezone.make_aware(datetime(2026, 2, 1))
+    )
+    
+    # Add scholarships to list for the engine
+    sample_scholarships = [engineering_scholarship, cs_scholarship]
 
     # Initialize engine and add sample data
     engine = ReportEngine()
