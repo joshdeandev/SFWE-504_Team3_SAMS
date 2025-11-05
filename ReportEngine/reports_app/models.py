@@ -1,5 +1,7 @@
 from django.db import models
 from django.utils import timezone
+from typing import Dict, List, Optional, Any
+from datetime import datetime
 
 
 class Applicant(models.Model):
@@ -34,12 +36,10 @@ class Applicant(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.student_id})"
-
+    
     @staticmethod
     def _make_json_serializable(obj):
-        """Recursively convert datetime/date objects inside lists/dicts to ISO-formatted strings so
-        they can be stored in JSONField or serialized to JSON.
-        """
+        """Recursively convert datetime/date objects to ISO strings for JSON storage."""
         from datetime import datetime, date
         if obj is None:
             return obj
@@ -51,17 +51,15 @@ class Applicant(models.Model):
             return [Applicant._make_json_serializable(v) for v in obj]
         if isinstance(obj, tuple):
             return tuple(Applicant._make_json_serializable(v) for v in obj)
-        # For other types (int, float, str, bool, etc.) return as-is
         return obj
 
     @classmethod
     def from_dict(cls, data: dict):
         """Create or update an Applicant from a dictionary similar to the previous ApplicantData shape.
 
-        This helper is convenient for seeding sample data or migrating in-memory examples into the DB.
-        It performs a get_or_create on student_id when available.
+        Sanitizes nested structures (dates -> ISO strings) so they are safe to store in JSONFields.
+        Performs update_or_create when student_id is provided.
         """
-        # Sanitize nested structures so JSONField assignments contain only JSON-serializable types
         sanitized = {
             'academic_achievements': cls._make_json_serializable(data.get('academic_achievements', [])),
             'financial_info': cls._make_json_serializable(data.get('financial_info', {})),
@@ -70,7 +68,6 @@ class Applicant(models.Model):
             'committee_feedback': cls._make_json_serializable(data.get('committee_feedback', [])),
         }
 
-        # Convert expected_graduation to date if it's a datetime/string
         expected_graduation = data.get('expected_graduation')
         if hasattr(expected_graduation, 'date'):
             expected_graduation = expected_graduation.date()
@@ -97,7 +94,7 @@ class Applicant(models.Model):
             )
             return obj
 
-        # If no student_id provided, create a new record (non-unique)
+        # If no student_id provided, create a new record (non-unique temporary id)
         return cls.objects.create(
             name=data.get('name', ''),
             student_id=data.get('student_id') or f"tmp-{int(timezone.now().timestamp())}",
@@ -113,4 +110,75 @@ class Applicant(models.Model):
             academic_history=sanitized['academic_history'],
             interview_notes=data.get('interview_notes'),
             committee_feedback=sanitized['committee_feedback']
+        )
+
+
+class ScholarshipAward(models.Model):
+    """Model representing a scholarship award to a specific applicant."""
+    scholarship_name = models.CharField(max_length=255)
+    applicant = models.ForeignKey(Applicant, on_delete=models.CASCADE, related_name='awards')
+    award_date = models.DateTimeField()
+    award_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    disbursement_dates = models.JSONField(default=list)  # List[datetime] as ISO strings
+    requirements_met = models.JSONField(default=list)  # List[str]
+    requirements_pending = models.JSONField(default=list)  # List[str]
+    status = models.CharField(max_length=20, choices=[
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('revoked', 'Revoked')
+    ])
+    performance_metrics = models.JSONField(default=dict)  # Dict[str, Any]
+    essays_evaluation = models.JSONField(null=True, blank=True)  # Optional[List[Dict[str, Any]]]
+    interview_notes = models.TextField(null=True, blank=True)
+    committee_feedback = models.JSONField(null=True, blank=True)  # Optional[List[Dict[str, str]]]
+    notes = models.TextField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-award_date']
+        verbose_name = 'Scholarship Award'
+        verbose_name_plural = 'Scholarship Awards'
+
+    def __str__(self):
+        return f"{self.scholarship_name} awarded to {self.applicant.name}"
+
+    @classmethod
+    def from_dataclass(cls, data):
+        """Create or update a ScholarshipAward from the previous dataclass-style dict.
+        
+        This helper converts from the old dataclass format to the new model,
+        handling date serialization for JSONFields.
+        """
+        # Helper to convert datetime to ISO format in nested structures
+        def serialize_dates(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, dict):
+                return {k: serialize_dates(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [serialize_dates(v) for v in obj]
+            return obj
+
+        # Convert datetime lists to ISO strings for JSONField
+        disbursement_dates = [d.isoformat() for d in data.get('disbursement_dates', [])]
+        essays_eval = serialize_dates(data.get('essays_evaluation'))
+        committee_feedback = serialize_dates(data.get('committee_feedback'))
+        performance_metrics = serialize_dates(data.get('performance_metrics', {}))
+
+        return cls(
+            scholarship_name=data['scholarship_name'],
+            applicant=data['applicant'],
+            award_date=data['award_date'],
+            award_amount=data['award_amount'],
+            disbursement_dates=disbursement_dates,
+            requirements_met=data.get('requirements_met', []),
+            requirements_pending=data.get('requirements_pending', []),
+            status=data.get('status', 'active'),
+            performance_metrics=performance_metrics,
+            essays_evaluation=essays_eval,
+            interview_notes=data.get('interview_notes'),
+            committee_feedback=committee_feedback,
+            notes=data.get('notes')
         )

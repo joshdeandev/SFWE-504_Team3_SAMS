@@ -13,27 +13,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import csv
 import tempfile
-from .models import Applicant
+from .models import Applicant, ScholarshipAward
+import json
+from django.utils import timezone
 
-
-# ApplicantData dataclass removed; use `Applicant` Django model in `reports_app.models`
-
-@dataclass
-class ScholarshipAward:
-    """Data class representing a scholarship award to a specific applicant."""
-    scholarship_name: str
-    applicant: Applicant  # Changed from applicant_name to full Applicant (DB-backed)
-    award_date: datetime
-    award_amount: float
-    disbursement_dates: List[datetime]
-    requirements_met: List[str]
-    requirements_pending: List[str]
-    status: str  # 'active', 'completed', 'revoked'
-    performance_metrics: Dict[str, Any]  # GPA, participation, etc.
-    essays_evaluation: Optional[List[Dict[str, Any]]] = None  # Evaluation of submitted essays
-    interview_notes: Optional[str] = None  # Notes from scholarship interview
-    committee_feedback: Optional[List[Dict[str, str]]] = None  # Feedback from selection committee
-    notes: Optional[str] = None
 
 @dataclass
 class Scholarship:
@@ -48,7 +31,7 @@ class Scholarship:
     deadline: Optional[datetime] = None
     review_dates: List[datetime] = None  # Dates for periodic review
     reporting_schedule: Dict[str, datetime] = None  # Schedule for required reports
-    awards: List[ScholarshipAward] = None  # List of awards made under this scholarship
+    awards: List[Any] = None  # List of awards made under this scholarship, using Django model instances
 
 
 class ReportEngine:
@@ -123,38 +106,91 @@ class ReportEngine:
             # Process awards
             if scholarship.awards:
                 for award in scholarship.awards:
+                    # Normalize award_date (handle strings from JSONField or datetimes)
+                    award_date = getattr(award, 'award_date', None)
+                    if isinstance(award_date, str):
+                        try:
+                            award_date = datetime.fromisoformat(award_date)
+                        except Exception:
+                            award_date = pd.to_datetime(award_date).to_pydatetime()
+                    # Make timezone-aware when needed
+                    if getattr(award_date, 'tzinfo', None) is None:
+                        try:
+                            award_date = timezone.make_aware(award_date)
+                        except Exception:
+                            pass
+
+                    # Normalize disbursement dates: convert ISO strings to datetimes
+                    raw_disbursements = getattr(award, 'disbursement_dates', []) or []
+                    disbursement_dates = []
+                    for d in raw_disbursements:
+                        if isinstance(d, str):
+                            try:
+                                dt = datetime.fromisoformat(d)
+                            except Exception:
+                                dt = pd.to_datetime(d).to_pydatetime()
+                            # Ensure timezone-aware
+                            if getattr(dt, 'tzinfo', None) is None:
+                                try:
+                                    dt = timezone.make_aware(dt)
+                                except Exception:
+                                    pass
+                            disbursement_dates.append(dt)
+                        else:
+                            disbursement_dates.append(d)
+
                     # Only include awards within the date range
-                    if start_date <= award.award_date <= end_date:
-                        total_awarded += award.award_amount
-                        
-                        # Calculate disbursed amount
-                        disbursed = sum(
-                            award.award_amount / len(award.disbursement_dates)
-                            for date in award.disbursement_dates
-                            if date <= end_date
-                        )
-                        total_disbursed += disbursed
+                    if not award_date or not (start_date <= award_date <= end_date):
+                        continue
 
-                        award_summary = {
-                            'scholarship': scholarship.name,
-                            'recipient': award.applicant_name,
-                            'amount': award.award_amount,
-                            'disbursed': disbursed,
-                            'award_date': award.award_date,
-                            'status': award.status,
-                            'requirements_met': award.requirements_met,
-                            'requirements_pending': award.requirements_pending,
-                            'performance_metrics': award.performance_metrics,
-                            'next_disbursement': next(
-                                (d for d in award.disbursement_dates if d > end_date),
-                                None
-                            )
-                        }
+                    # Ensure award_amount is a float (handle Decimal)
+                    raw_amount = getattr(award, 'award_amount', 0)
+                    try:
+                        amount = float(raw_amount)
+                    except Exception:
+                        amount = raw_amount
 
-                        if award.status == 'completed':
-                            completed_awards.append(award_summary)
-                        elif award.status == 'active':
-                            active_awards.append(award_summary)
+                    total_awarded += amount
+
+                    # Calculate disbursed amount safely
+                    disbursed = 0.0
+                    if disbursement_dates:
+                        valid_dates = [d for d in disbursement_dates if d <= end_date]
+                        if valid_dates:
+                            disbursed = sum(amount / len(disbursement_dates) for _ in valid_dates)
+                    total_disbursed += disbursed
+
+                    # Normalize recipient name
+                    recipient = getattr(award, 'applicant_name', None)
+                    if not recipient:
+                        try:
+                            recipient = getattr(award.applicant, 'name', str(award.applicant))
+                        except Exception:
+                            recipient = str(award.applicant)
+
+                    # Determine next disbursement
+                    next_disb = None
+                    future_dates = [d for d in disbursement_dates if d > end_date]
+                    if future_dates:
+                        next_disb = min(future_dates)
+
+                    award_summary = {
+                        'scholarship': scholarship.name,
+                        'recipient': recipient,
+                        'amount': amount,
+                        'disbursed': disbursed,
+                        'award_date': award_date,
+                        'status': getattr(award, 'status', None),
+                        'requirements_met': getattr(award, 'requirements_met', []),
+                        'requirements_pending': getattr(award, 'requirements_pending', []),
+                        'performance_metrics': getattr(award, 'performance_metrics', {}),
+                        'next_disbursement': next_disb
+                    }
+
+                    if getattr(award, 'status', None) == 'completed':
+                        completed_awards.append(award_summary)
+                    elif getattr(award, 'status', None) == 'active':
+                        active_awards.append(award_summary)
 
         # Sort all dates
         upcoming_deadlines.sort(key=lambda x: x['deadline'])
@@ -1839,47 +1875,47 @@ def home(request):
                 'Financial Report': datetime(2026, 7, 15)
             },
             awards=[
-                ScholarshipAward(
-                    scholarship_name="Engineering Excellence Scholarship",
-                    applicant=john_doe,  # Using the detailed ApplicantData
-                    award_date=datetime(2025, 8, 15),
-                    award_amount=5000.00,
-                    disbursement_dates=[
-                        datetime(2025, 9, 1),
-                        datetime(2026, 1, 1)
-                    ],
-                    requirements_met=[
-                        "Enrollment verification",
-                        "First semester GPA requirement"
-                    ],
-                    requirements_pending=[
-                        "Second semester progress report",
-                        "Community service hours"
-                    ],
-                    status="active",
-                    performance_metrics={
-                        'current_gpa': 3.8,
-                        'credits_completed': 15,
-                        'service_hours': 20
-                    },
-                    essays_evaluation=[
-                        {
-                            'prompt': 'Career Goals',
-                            'score': 9,
-                            'feedback': 'Excellent clarity and vision'
-                        },
-                        {
-                            'prompt': 'Impact',
-                            'score': 8,
-                            'feedback': 'Strong understanding of opportunity'
-                        }
-                    ],
-                    interview_notes="Strong candidate with clear goals and excellent communication skills",
-                    committee_feedback=[
-                        {'member': 'Dr. Smith', 'comments': 'Highly recommended'},
-                        {'member': 'Prof. Johnson', 'comments': 'Outstanding potential'}
-                    ]
-                )
+                    ScholarshipAward.objects.create(
+                        scholarship_name="Engineering Excellence Scholarship",
+                        applicant=john_doe,  # Using the Applicant model instance
+                        award_date=timezone.make_aware(datetime(2025, 8, 15)),
+                        award_amount=5000.00,
+                        disbursement_dates=json.dumps([d.isoformat() for d in [
+                            datetime(2025, 9, 1),
+                            datetime(2026, 1, 1)
+                        ]]),
+                        requirements_met=json.dumps([
+                            "Enrollment verification",
+                            "First semester GPA requirement"
+                        ]),
+                        requirements_pending=json.dumps([
+                            "Second semester progress report",
+                            "Community service hours"
+                        ]),
+                        status="active",
+                        performance_metrics=json.dumps({
+                            'current_gpa': 3.8,
+                            'credits_completed': 15,
+                            'service_hours': 20
+                        }),
+                        essays_evaluation=json.dumps([
+                            {
+                                'prompt': 'Career Goals',
+                                'score': 9,
+                                'feedback': 'Excellent clarity and vision'
+                            },
+                            {
+                                'prompt': 'Impact',
+                                'score': 8,
+                                'feedback': 'Strong understanding of opportunity'
+                            }
+                        ]),
+                        interview_notes="Strong candidate with clear goals and excellent communication skills",
+                        committee_feedback=json.dumps([
+                            {'member': 'Dr. Smith', 'comments': 'Highly recommended'},
+                            {'member': 'Prof. Johnson', 'comments': 'Outstanding potential'}
+                        ])
+                    )
             ]
         ),
         Scholarship(
