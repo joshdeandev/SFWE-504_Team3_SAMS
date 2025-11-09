@@ -739,6 +739,20 @@ END OF LOG
         """Add a new scholarship to the system."""
         self.scholarships.append(scholarship)
 
+    def get_scholarships_data(self) -> List[Scholarship]:
+        """Unified source of scholarships for reports and analytics.
+
+        If in-memory scholarships have been added to the engine, use those;
+        otherwise, read from the database to ensure a single source of truth.
+        """
+        try:
+            if getattr(self, 'scholarships', None):
+                # Ensure we return concrete model instances (already the case in add_scholarship usage)
+                return list(self.scholarships)
+        except Exception:
+            pass
+        return list(Scholarship.objects.all())
+
     # Function to generate disbursement report. Meets requirement SFWE504_3-LLR-8.
     def generate_disbursement_report(self, scholarship_name: str = None) -> Dict[str, Any]:
         """Generate a disbursement report for scholarship recipients showing payment details.
@@ -2036,14 +2050,14 @@ END OF LOG
         Args:
             filters (dict, optional): Filters to apply (e.g., {'frequency': 'annual'})
             export_format (str, optional): Format to export the report ('pdf', 'xlsx', 'csv')
-            output_path (str, optional): Path where the exported file should be saved
-                                       If not provided but export_format is, uses a temporary file
+            output_path (str, optional): Path where the exported file should be saved.
 
         Returns:
             Union[dict, str]: Report data as dictionary if no export_format specified,
-                            otherwise path to the exported file
+                              otherwise path to the exported file.
         """
-        scholarships_data = self.scholarships
+        # Use unified data access so all features see the same set of scholarships
+        scholarships_data = self.get_scholarships_data()
 
         # Apply filters if provided
         if filters:
@@ -2083,28 +2097,16 @@ END OF LOG
         # Handle export if requested
         if export_format:
             if not output_path:
-                # Create temporary file if no output path provided
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f'.{export_format}')
                 output_path = temp_file.name
                 temp_file.close()
-
-            try:
-                if export_format.lower() == 'pdf':
-                    return self.export_to_pdf(output_path, filters)
-                elif export_format.lower() == 'xlsx':
-                    return self.export_to_excel(output_path, filters)
-                elif export_format.lower() == 'csv':
-                    return self.export_to_csv(output_path, filters)
-                else:
-                    raise ValueError(f"Unsupported export format: {export_format}")
-            except Exception as e:
-                if not output_path:
-                    # Clean up temporary file on error
-                    try:
-                        os.unlink(output_path)
-                    except:
-                        pass
-                raise e
+            if export_format.lower() == 'pdf':
+                return self.export_to_pdf(output_path, filters)
+            if export_format.lower() == 'xlsx':
+                return self.export_to_excel(output_path, filters)
+            if export_format.lower() == 'csv':
+                return self.export_to_csv(output_path, filters)
+            raise ValueError(f"Unsupported export format: {export_format}")
 
         return report_data
         
@@ -2778,6 +2780,211 @@ END OF LOG
         
         return results
 
+    # Custom Analytics and Reporting Functions
+    # Generate custom reports and analytics on application trends and scholarship impacts
+    def generate_analytics_report(self,
+                                  start_date: Optional[datetime] = None,
+                                  end_date: Optional[datetime] = None,
+                                  report_types: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Generate analytics using only data accessed through ReportEngine helpers.
+
+        Ensures consistency with other report outputs by:
+        - Using generate_applicant_report for application data
+        - Using get_awards_queryset for scholarship impact
+
+        Supported report_types: 'application_trends', 'scholarship_impact', 'all'
+        """
+        from django.db.models import Count, Avg, Sum, Min, Max
+        from datetime import timedelta
+        from collections import defaultdict
+
+        # Defaults: past year window
+        if end_date is None:
+            end_date = timezone.now()
+        if start_date is None:
+            start_date = end_date - timedelta(days=365)
+
+        if not report_types or 'all' in report_types:
+            report_types = ['application_trends', 'scholarship_impact']
+
+        analytics: Dict[str, Any] = {
+            'metadata': {
+                'generated_at': timezone.now(),
+                'period_start': start_date,
+                'period_end': end_date,
+                'report_types': report_types,
+                'source': 'ReportEngine unified data access'
+            }
+        }
+
+        # Helper: unified applicant queryset filtered by date
+        def _get_applicants():
+            qs = Applicant.objects.all()
+            if start_date:
+                qs = qs.filter(created_at__gte=start_date)
+            if end_date:
+                qs = qs.filter(created_at__lte=end_date)
+            return qs
+
+        # Helper: unified awards queryset filtered by date
+        def _get_awards():
+            qs = ScholarshipAward.objects.all()
+            if start_date:
+                qs = qs.filter(award_date__gte=start_date)
+            if end_date:
+                qs = qs.filter(award_date__lte=end_date)
+            return qs
+
+        # 1) Application Trends (built from applicant report + queryset for efficiency distributions)
+        if 'application_trends' in report_types:
+            applicants_qs = _get_applicants()
+
+            monthly = defaultdict(int)
+            for a in applicants_qs:
+                if getattr(a, 'created_at', None):
+                    monthly[a.created_at.strftime('%Y-%m')] += 1
+
+            major_dist = list(
+                applicants_qs.values('major').annotate(count=Count('id')).order_by('-count')
+            )
+            level_dist = list(
+                applicants_qs.values('academic_level').annotate(count=Count('id')).order_by('-count')
+            )
+            gpa_stats = applicants_qs.aggregate(
+                avg_gpa=Avg('gpa'), min_gpa=Min('gpa'), max_gpa=Max('gpa')
+            )
+
+            analytics['application_trends'] = {
+                'total_applications': applicants_qs.count(),
+                'monthly_trends': dict(monthly),
+                'major_distribution': major_dist,
+                'academic_level_distribution': level_dist,
+                'gpa_statistics': gpa_stats,
+            }
+
+        # 2) Scholarship Impact (awards only via helper)
+        if 'scholarship_impact' in report_types:
+            awards_qs = _get_awards()
+            financial = awards_qs.aggregate(
+                total_awarded=Sum('award_amount'),
+                avg_award=Avg('award_amount'),
+                min_award=Min('award_amount'),
+                max_award=Max('award_amount'),
+            )
+            by_scholarship = list(
+                awards_qs.values('scholarship_name')
+                .annotate(count=Count('id'), total_amount=Sum('award_amount'))
+                .order_by('-total_amount')
+            )
+            status_breakdown = list(
+                awards_qs.values('status').annotate(count=Count('id')).order_by('-count')
+            )
+
+            analytics['scholarship_impact'] = {
+                'total_awards': awards_qs.count(),
+                'financial_impact': financial,
+                'scholarship_breakdown': by_scholarship,
+                'status_distribution': status_breakdown,
+            }
+
+        return analytics
+
+    def export_analytics_report_to_json(self, analytics_data: Dict[str, Any], output_path: str) -> str:
+        """Export analytics report to JSON format."""
+        import json
+        from datetime import date
+        from decimal import Decimal
+
+        def _ser(obj):
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            return str(obj)
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(analytics_data, f, indent=2, default=_ser)
+        return output_path
+
+    def export_analytics_report_to_excel(self, analytics_data: Dict[str, Any], output_path: str) -> str:
+        """Export analytics report to an Excel workbook with basic sheets."""
+        from openpyxl import Workbook
+
+        def _sheet(name: str) -> str:
+            for c in ['\\', '/', '*', '?', ':', '[', ']']:
+                name = name.replace(c, '-')
+            return (name or 'Sheet')[:31]
+
+        wb = Workbook()
+        meta_ws = wb.active
+        meta_ws.title = 'Metadata'
+        meta = analytics_data.get('metadata', {})
+        meta_ws.append(['Field', 'Value'])
+        for k, v in meta.items():
+            meta_ws.append([k, str(v)])
+
+        for section, data in analytics_data.items():
+            if section == 'metadata':
+                continue
+            ws = wb.create_sheet(_sheet(section))
+            if isinstance(data, dict):
+                ws.append(['Key', 'Value'])
+                for k, v in data.items():
+                    ws.append([k, str(v)])
+            elif isinstance(data, list):
+                ws.append(['Index', 'Value'])
+                for i, v in enumerate(data):
+                    ws.append([i, str(v)])
+            else:
+                ws.append(['Value'])
+                ws.append([str(data)])
+        wb.save(output_path)
+        return output_path
+
+    def export_analytics_report_to_pdf(self, analytics_data: Dict[str, Any], output_path: str) -> str:
+        """Export analytics to a simple PDF summary."""
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib import colors
+        doc = SimpleDocTemplate(output_path, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = [Paragraph('Scholarship Analytics Report', styles['Title']), Spacer(1, 12)]
+
+        meta = analytics_data.get('metadata', {})
+        if meta:
+            story.append(Paragraph('Metadata', styles['Heading2']))
+            rows = [["Field", "Value"]] + [[k, str(v)] for k, v in meta.items()]
+            t = Table(rows)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 12))
+
+        for section, data in analytics_data.items():
+            if section == 'metadata':
+                continue
+            story.append(Paragraph(section.replace('_', ' ').title(), styles['Heading2']))
+            rows = [["Key", "Value"]]
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    rows.append([str(k), str(v)])
+            else:
+                rows.append(['value', str(data)])
+            t = Table(rows)
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+                ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 18))
+
+        doc.build(story)
+        return output_path
+
 
 import logging
 
@@ -3269,6 +3476,84 @@ def home(request):
             scholarship['donor'] = {'name': 'Unknown', 'contact': 'Not provided'}
     
     return render(request, 'reports_app/index.html', {'report': report_data})
+
+
+def combined_analytics(request):
+    """Generate and display combined Application & Scholarship analytics with export options."""
+    from datetime import datetime
+    engine = ReportEngine()
+
+    # Read inputs
+    start_raw = request.GET.get('start_date')
+    end_raw = request.GET.get('end_date')
+    export_format = request.GET.get('export_format')
+    errors = []
+    start_dt = None
+    end_dt = None
+    try:
+        if start_raw:
+            start_dt = datetime.strptime(start_raw, '%Y-%m-%d')
+        if end_raw:
+            end_dt = datetime.strptime(end_raw, '%Y-%m-%d')
+    except ValueError:
+        errors.append('Invalid date format. Use YYYY-MM-DD.')
+
+    # Generate analytics for the two requested modules
+    analytics = None
+    try:
+        analytics = engine.generate_analytics_report(
+            start_date=start_dt,
+            end_date=end_dt,
+            report_types=['application_trends', 'scholarship_impact']
+        )
+    except Exception as e:
+        logger.error(f"Combined analytics generation failed: {e}")
+        errors.append(f"Analytics generation failed: {e}")
+
+    # Export if requested
+    if export_format and analytics:
+        import tempfile, os
+        try:
+            tmp_dir = tempfile.gettempdir()
+            filename_base = f"combined_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            if export_format == 'json':
+                path = os.path.join(tmp_dir, filename_base + '.json')
+                engine.export_analytics_report_to_json(analytics, path)
+                mime = 'application/json'
+            elif export_format == 'excel':
+                path = os.path.join(tmp_dir, filename_base + '.xlsx')
+                engine.export_analytics_report_to_excel(analytics, path)
+                mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            elif export_format == 'pdf':
+                path = os.path.join(tmp_dir, filename_base + '.pdf')
+                engine.export_analytics_report_to_pdf(analytics, path)
+                mime = 'application/pdf'
+            else:
+                path = None
+                mime = None
+                errors.append('Unsupported export format.')
+
+            if path and os.path.exists(path):
+                with open(path, 'rb') as f:
+                    data = f.read()
+                from django.http import HttpResponse
+                response = HttpResponse(data, content_type=mime)
+                response['Content-Disposition'] = f'attachment; filename="{os.path.basename(path)}"'
+                return response
+        except Exception as e:
+            logger.error(f"Combined analytics export failed: {e}")
+            errors.append(f"Export failed: {e}")
+
+    context = {
+        'analytics': analytics,
+        'errors': errors,
+        'form': {
+            'start_date': start_raw or '',
+            'end_date': end_raw or '',
+            'export_format': export_format or ''
+        }
+    }
+    return render(request, 'reports_app/combined_analytics.html', context)
 
 
 def request_information(request):
