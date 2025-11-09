@@ -252,8 +252,103 @@
           </form>
         </div>
       </div>
+
+      <!-- Request Additional Applicant Information -->
+      <div class="report-section">
+        <h4>Request Additional Applicant Information</h4>
+        <p>Submit a request for additional information about an applicant during the review process:</p>
+        <div style="display: flex; gap: 1em;">
+          <button type="button" onclick="showRequestModal()" style="background-color: #17a2b8; color: white;">
+            <i class="fa fa-info-circle"></i> Request Information
+          </button>
+          <form method="get" action="{% url 'view_request_logs' %}" style="margin: 0;">
+            <button type="submit" style="background-color: #6f42c1; color: white;">
+              <i class="fa fa-list-alt"></i> View Request Logs
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal for requesting additional information -->
+    <div id="requestModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+      <div style="background: white; max-width: 600px; margin: 50px auto; padding: 2em; border-radius: 8px; position: relative;">
+        <button onclick="closeRequestModal()" style="position: absolute; top: 10px; right: 10px; background: #dc3545; color: white; border: none; border-radius: 50%; width: 30px; height: 30px; cursor: pointer; font-size: 18px;">×</button>
+        <h3 style="margin-top: 0;">Request Additional Applicant Information</h3>
+        <form id="requestForm" action="/request-information/" method="post">
+          {% csrf_token %}
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Applicant Student ID:</label>
+            <input type="text" name="applicant_id" required style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;" placeholder="e.g., 12345678">
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Your Name (Reviewer):</label>
+            <input type="text" name="reviewer_name" required style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;" placeholder="Dr. Jane Smith">
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Your Email:</label>
+            <input type="email" name="reviewer_email" style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;" placeholder="reviewer@university.edu">
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Scholarship Name (Optional):</label>
+            <select name="scholarship_name" style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;">
+              <option value="">Select Scholarship (Optional)</option>
+              {% for scholarship in report.scholarships %}
+                <option value="{{ scholarship.name }}">{{ scholarship.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Request Type:</label>
+            <select name="request_type" required style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;">
+              <option value="">Select Type</option>
+              <option value="transcript">Official Transcript</option>
+              <option value="recommendation">Letter of Recommendation</option>
+              <option value="essay_clarification">Essay Clarification</option>
+              <option value="financial_documents">Financial Documents</option>
+              <option value="interview_schedule">Interview Scheduling</option>
+              <option value="verification">Enrollment/Status Verification</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Priority:</label>
+            <select name="priority" style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px;">
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="high">High</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </div>
+          <div style="margin-bottom: 1em;">
+            <label style="display: block; margin-bottom: 0.5em; font-weight: bold;">Request Details:</label>
+            <textarea name="request_details" required rows="4" style="width: 100%; padding: 0.5em; border: 1px solid #ddd; border-radius: 4px; resize: vertical;" placeholder="Please provide detailed information about what you need..."></textarea>
+          </div>
+          <div style="display: flex; gap: 1em; justify-content: flex-end;">
+            <button type="button" onclick="closeRequestModal()" style="background-color: #6c757d; color: white; padding: 0.7em 1.5em;">Cancel</button>
+            <button type="submit" style="background-color: #28a745; color: white; padding: 0.7em 1.5em;">Submit Request</button>
+          </div>
+        </form>
+      </div>
+    </div>
       
       <script>
+        function showRequestModal() {
+          document.getElementById('requestModal').style.display = 'block';
+        }
+        
+        function closeRequestModal() {
+          document.getElementById('requestModal').style.display = 'none';
+        }
+        
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+          const modal = document.getElementById('requestModal');
+          if (event.target === modal) {
+            closeRequestModal();
+          }
+        }
+        
         // Update all donor name inputs when donor is selected
         document.getElementById('donor-select').addEventListener('change', function() {
           const donorName = this.value;

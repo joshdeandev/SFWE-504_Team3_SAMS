@@ -1,7 +1,6 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import os
 import pandas as pd
@@ -13,8 +12,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import csv
 import tempfile
-from .models import Applicant, ScholarshipAward, Scholarship
-import json
+from .models import Applicant, ScholarshipAward, Scholarship, ReviewerInformationRequest
 from django.utils import timezone
 
 
@@ -23,6 +21,200 @@ class ReportEngine:
 
     def __init__(self):
         self.scholarships = []
+
+    # Function to log reviewer requests for additional applicant information
+    def log_information_request(self, applicant_id: str = None, applicant: Applicant = None,
+                                reviewer_name: str = None, reviewer_email: str = None,
+                                scholarship_name: str = None, request_type: str = None,
+                                request_details: str = None, priority: str = 'medium') -> ReviewerInformationRequest:
+        """Log a reviewer's request for additional applicant information.
+        
+        Meets requirement: The report engine shall log reviewer requests for additional applicant information.
+        
+        Args:
+            applicant_id (str, optional): Student ID of the applicant
+            applicant (Applicant, optional): Applicant model instance (if already loaded)
+            reviewer_name (str): Name of the reviewer making the request
+            reviewer_email (str, optional): Email of the reviewer
+            scholarship_name (str, optional): Name of the scholarship being reviewed
+            request_type (str): Type of information requested (e.g., 'transcript', 'recommendation', 'essay_clarification')
+            request_details (str): Detailed description of what information is needed
+            priority (str): Priority level ('low', 'medium', 'high', 'urgent'). Defaults to 'medium'
+            
+        Returns:
+            ReviewerInformationRequest: The created request object
+            
+        Raises:
+            ValueError: If applicant cannot be found or required fields are missing
+        """
+        # Validate required fields
+        if not reviewer_name:
+            raise ValueError("reviewer_name is required")
+        if not request_type:
+            raise ValueError("request_type is required")
+        if not request_details:
+            raise ValueError("request_details is required")
+        
+        # Get applicant instance if not provided
+        if not applicant:
+            if not applicant_id:
+                raise ValueError("Either applicant or applicant_id must be provided")
+            try:
+                applicant = Applicant.objects.get(student_id=applicant_id)
+            except Applicant.DoesNotExist:
+                raise ValueError(f"Applicant with student_id '{applicant_id}' not found")
+        
+        # Create the information request
+        request = ReviewerInformationRequest.objects.create(
+            applicant=applicant,
+            reviewer_name=reviewer_name,
+            reviewer_email=reviewer_email,
+            scholarship_name=scholarship_name,
+            request_type=request_type,
+            request_details=request_details,
+            priority=priority
+        )
+        
+        # Generate and save a report log for this request
+        self._generate_information_request_log(request)
+        
+        return request
+    
+    def _generate_information_request_log(self, request: ReviewerInformationRequest) -> str:
+        """Generate a detailed log report for an information request.
+        
+        Creates a timestamped log file documenting the request details.
+        
+        Args:
+            request (ReviewerInformationRequest): The information request object
+            
+        Returns:
+            str: Path to the generated log file
+        """
+        # Create logs directory if it doesn't exist
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'information_request_logs')
+        os.makedirs(logs_dir, exist_ok=True)
+        
+        # Generate timestamped filename
+        timestamp = request.requested_at.strftime('%Y%m%d_%H%M%S')
+        filename = f"info_request_{request.id}_{timestamp}.txt"
+        log_path = os.path.join(logs_dir, filename)
+        
+        # Generate log content
+        log_content = f"""
+================================================================================
+APPLICANT INFORMATION REQUEST LOG
+================================================================================
+
+Request ID: {request.id}
+Requested At: {request.requested_at.strftime('%Y-%m-%d %H:%M:%S')}
+Status: {request.status.upper()}
+
+--------------------------------------------------------------------------------
+APPLICANT INFORMATION
+--------------------------------------------------------------------------------
+Name: {request.applicant.name}
+Student ID: {request.applicant.student_id}
+NetID: {request.applicant.netid or 'N/A'}
+Major: {request.applicant.major}
+GPA: {request.applicant.gpa:.2f}
+Academic Level: {request.applicant.academic_level}
+
+--------------------------------------------------------------------------------
+REVIEWER INFORMATION
+--------------------------------------------------------------------------------
+Reviewer Name: {request.reviewer_name}
+Reviewer Email: {request.reviewer_email or 'N/A'}
+Scholarship: {request.scholarship_name or 'N/A'}
+
+--------------------------------------------------------------------------------
+REQUEST DETAILS
+--------------------------------------------------------------------------------
+Request Type: {request.request_type.replace('_', ' ').title()}
+Priority: {request.priority.upper()}
+
+Details:
+{request.request_details}
+
+--------------------------------------------------------------------------------
+FULFILLMENT STATUS
+--------------------------------------------------------------------------------
+Status: {request.status.title()}
+Fulfilled At: {request.fulfilled_at.strftime('%Y-%m-%d %H:%M:%S') if request.fulfilled_at else 'Not yet fulfilled'}
+Fulfillment Notes: {request.fulfillment_notes or 'N/A'}
+
+================================================================================
+END OF LOG
+================================================================================
+"""
+        
+        # Write log to file
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(log_content.strip())
+        
+        logger.info(f"Information request log generated: {log_path}")
+        return log_path
+    
+    def get_information_requests(self, applicant_id: str = None, status: str = None,
+                                scholarship_name: str = None) -> List[ReviewerInformationRequest]:
+        """Retrieve information requests with optional filtering.
+        
+        Args:
+            applicant_id (str, optional): Filter by applicant student ID
+            status (str, optional): Filter by request status ('pending', 'in_progress', 'fulfilled', 'cancelled')
+            scholarship_name (str, optional): Filter by scholarship name
+            
+        Returns:
+            List[ReviewerInformationRequest]: List of matching requests
+        """
+        queryset = ReviewerInformationRequest.objects.all()
+        
+        if applicant_id:
+            queryset = queryset.filter(applicant__student_id=applicant_id)
+        
+        if status:
+            queryset = queryset.filter(status=status)
+            
+        if scholarship_name:
+            queryset = queryset.filter(scholarship_name=scholarship_name)
+        
+        return list(queryset)
+    
+    def update_request_status(self, request_id: int, status: str, 
+                             fulfillment_notes: str = None) -> ReviewerInformationRequest:
+        """Update the status of an information request.
+        
+        Args:
+            request_id (int): ID of the request to update
+            status (str): New status ('pending', 'in_progress', 'fulfilled', 'cancelled')
+            fulfillment_notes (str, optional): Notes about fulfillment (especially for 'fulfilled' status)
+            
+        Returns:
+            ReviewerInformationRequest: The updated request object
+            
+        Raises:
+            ValueError: If request not found or invalid status
+        """
+        valid_statuses = ['pending', 'in_progress', 'fulfilled', 'cancelled']
+        if status not in valid_statuses:
+            raise ValueError(f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
+        
+        try:
+            request = ReviewerInformationRequest.objects.get(id=request_id)
+        except ReviewerInformationRequest.DoesNotExist:
+            raise ValueError(f"Request with ID {request_id} not found")
+        
+        request.status = status
+        if status == 'fulfilled':
+            request.fulfilled_at = timezone.now()
+        if fulfillment_notes:
+            request.fulfillment_notes = fulfillment_notes
+        request.save()
+        
+        # Regenerate log with updated status
+        self._generate_information_request_log(request)
+        
+        return request
 
     # Function to generate donor report. Meets requirement SFWE504_3-LLR-2    
     def generate_donor_report(self, donor_name: str, start_date: Optional[datetime] = None, 
@@ -39,9 +231,15 @@ class ReportEngine:
         """
         # Default to last year if no dates provided
         if not end_date:
-            end_date = datetime.now()
+            end_date = timezone.now()
         if not start_date:
             start_date = end_date - pd.DateOffset(years=1)
+        
+        # Ensure dates are timezone-aware
+        if end_date.tzinfo is None:
+            end_date = timezone.make_aware(end_date)
+        if start_date.tzinfo is None:
+            start_date = timezone.make_aware(start_date)
 
         # Filter scholarships for this donor
         donor_scholarships = [
@@ -60,16 +258,44 @@ class ReportEngine:
 
         for scholarship in donor_scholarships:
             # Track deadlines
-            if scholarship.deadline and start_date <= scholarship.deadline <= end_date:
-                upcoming_deadlines.append({
-                    'scholarship': scholarship.name,
-                    'deadline': scholarship.deadline,
-                    'type': 'Application Deadline'
-                })
+            if scholarship.deadline:
+                deadline = scholarship.deadline
+                if deadline.tzinfo is None:
+                    deadline = timezone.make_aware(deadline)
+                if start_date <= deadline <= end_date:
+                    upcoming_deadlines.append({
+                        'scholarship': scholarship.name,
+                        'deadline': deadline,
+                        'type': 'Application Deadline'
+                    })
 
-            # Track review dates
+            # Track review dates (stored as ISO strings in JSON)
             if scholarship.review_dates:
-                for review_date in scholarship.review_dates:
+                # Handle case where review_dates might be a JSON string instead of a list
+                review_dates_list = scholarship.review_dates
+                if isinstance(review_dates_list, str):
+                    try:
+                        import json
+                        review_dates_list = json.loads(review_dates_list)
+                    except:
+                        review_dates_list = []
+                
+                for review_date_item in review_dates_list:
+                    # Convert ISO string to datetime if needed
+                    if isinstance(review_date_item, str):
+                        try:
+                            review_date = datetime.fromisoformat(review_date_item)
+                            if review_date.tzinfo is None:
+                                review_date = timezone.make_aware(review_date)
+                        except:
+                            continue  # Skip invalid date strings
+                    elif isinstance(review_date_item, datetime):
+                        review_date = review_date_item
+                        if review_date.tzinfo is None:
+                            review_date = timezone.make_aware(review_date)
+                    else:
+                        continue  # Skip invalid types
+                    
                     if start_date <= review_date <= end_date:
                         upcoming_reviews.append({
                             'scholarship': scholarship.name,
@@ -77,104 +303,141 @@ class ReportEngine:
                             'type': 'Performance Review'
                         })
 
-            # Track reporting requirements
+            # Track reporting requirements (stored as ISO strings in JSON)
             if scholarship.reporting_schedule:
-                for report_type, report_date in scholarship.reporting_schedule.items():
-                    if start_date <= report_date <= end_date:
-                        reporting_requirements.append({
-                            'scholarship': scholarship.name,
-                            'date': report_date,
-                            'type': report_type
-                        })
-
-            # Process awards
-            if scholarship.awards:
-                for award in scholarship.awards:
-                    # Normalize award_date (handle strings from JSONField or datetimes)
-                    award_date = getattr(award, 'award_date', None)
-                    if isinstance(award_date, str):
-                        try:
-                            award_date = datetime.fromisoformat(award_date)
-                        except Exception:
-                            award_date = pd.to_datetime(award_date).to_pydatetime()
-                    # Make timezone-aware when needed
-                    if getattr(award_date, 'tzinfo', None) is None:
-                        try:
-                            award_date = timezone.make_aware(award_date)
-                        except Exception:
-                            pass
-
-                    # Normalize disbursement dates: convert ISO strings to datetimes
-                    raw_disbursements = getattr(award, 'disbursement_dates', []) or []
-                    disbursement_dates = []
-                    for d in raw_disbursements:
-                        if isinstance(d, str):
-                            try:
-                                dt = datetime.fromisoformat(d)
-                            except Exception:
-                                dt = pd.to_datetime(d).to_pydatetime()
-                            # Ensure timezone-aware
-                            if getattr(dt, 'tzinfo', None) is None:
-                                try:
-                                    dt = timezone.make_aware(dt)
-                                except Exception:
-                                    pass
-                            disbursement_dates.append(dt)
-                        else:
-                            disbursement_dates.append(d)
-
-                    # Only include awards within the date range
-                    if not award_date or not (start_date <= award_date <= end_date):
-                        continue
-
-                    # Ensure award_amount is a float (handle Decimal)
-                    raw_amount = getattr(award, 'award_amount', 0)
+                # Handle case where reporting_schedule might be a JSON string instead of a dict
+                reporting_schedule_dict = scholarship.reporting_schedule
+                if isinstance(reporting_schedule_dict, str):
                     try:
-                        amount = float(raw_amount)
+                        import json
+                        reporting_schedule_dict = json.loads(reporting_schedule_dict)
+                    except:
+                        reporting_schedule_dict = {}
+                
+                if isinstance(reporting_schedule_dict, dict):
+                    for report_type, report_date_item in reporting_schedule_dict.items():
+                        # Convert ISO string to datetime if needed
+                        if isinstance(report_date_item, str):
+                            try:
+                                report_date = datetime.fromisoformat(report_date_item)
+                                if report_date.tzinfo is None:
+                                    report_date = timezone.make_aware(report_date)
+                            except:
+                                continue  # Skip invalid date strings
+                        elif isinstance(report_date_item, datetime):
+                            report_date = report_date_item
+                            if report_date.tzinfo is None:
+                                report_date = timezone.make_aware(report_date)
+                        else:
+                            continue  # Skip invalid types
+                        
+                        if start_date <= report_date <= end_date:
+                            reporting_requirements.append({
+                                'scholarship': scholarship.name,
+                                'date': report_date,
+                                'type': report_type
+                            })
+
+            # Process awards - query ScholarshipAward model by scholarship name
+            scholarship_awards = ScholarshipAward.objects.filter(scholarship_name=scholarship.name)
+            
+            for award in scholarship_awards:
+                # Normalize award_date (handle strings from JSONField or datetimes)
+                award_date = award.award_date
+                if isinstance(award_date, str):
+                    try:
+                        award_date = datetime.fromisoformat(award_date)
                     except Exception:
-                        amount = raw_amount
+                        award_date = pd.to_datetime(award_date).to_pydatetime()
+                # Make timezone-aware when needed
+                if award_date and getattr(award_date, 'tzinfo', None) is None:
+                    try:
+                        award_date = timezone.make_aware(award_date)
+                    except Exception:
+                        pass
 
-                    total_awarded += amount
-
-                    # Calculate disbursed amount safely
-                    disbursed = 0.0
-                    if disbursement_dates:
-                        valid_dates = [d for d in disbursement_dates if d <= end_date]
-                        if valid_dates:
-                            disbursed = sum(amount / len(disbursement_dates) for _ in valid_dates)
-                    total_disbursed += disbursed
-
-                    # Normalize recipient name
-                    recipient = getattr(award, 'applicant_name', None)
-                    if not recipient:
+                # Normalize disbursement dates: convert ISO strings to datetimes
+                raw_disbursements = award.disbursement_dates or []
+                
+                # Handle case where disbursement_dates might be a JSON string instead of a list
+                if isinstance(raw_disbursements, str):
+                    try:
+                        import json
+                        raw_disbursements = json.loads(raw_disbursements)
+                    except:
+                        raw_disbursements = []
+                
+                disbursement_dates = []
+                for d in raw_disbursements:
+                    if isinstance(d, str):
                         try:
-                            recipient = getattr(award.applicant, 'name', str(award.applicant))
+                            dt = datetime.fromisoformat(d)
                         except Exception:
-                            recipient = str(award.applicant)
+                            try:
+                                dt = pd.to_datetime(d).to_pydatetime()
+                            except:
+                                continue  # Skip invalid date strings
+                        # Ensure timezone-aware
+                        if getattr(dt, 'tzinfo', None) is None:
+                            try:
+                                dt = timezone.make_aware(dt)
+                            except Exception:
+                                pass
+                        disbursement_dates.append(dt)
+                    elif isinstance(d, datetime):
+                        dt = d
+                        # Ensure timezone-aware
+                        if getattr(dt, 'tzinfo', None) is None:
+                            try:
+                                dt = timezone.make_aware(dt)
+                            except Exception:
+                                pass
+                        disbursement_dates.append(dt)
+                    # Skip invalid types
 
-                    # Determine next disbursement
-                    next_disb = None
-                    future_dates = [d for d in disbursement_dates if d > end_date]
-                    if future_dates:
-                        next_disb = min(future_dates)
+                # Only include awards within the date range
+                if not award_date or not (start_date <= award_date <= end_date):
+                    continue
 
-                    award_summary = {
-                        'scholarship': scholarship.name,
-                        'recipient': recipient,
-                        'amount': amount,
-                        'disbursed': disbursed,
-                        'award_date': award_date,
-                        'status': getattr(award, 'status', None),
-                        'requirements_met': getattr(award, 'requirements_met', []),
-                        'requirements_pending': getattr(award, 'requirements_pending', []),
-                        'performance_metrics': getattr(award, 'performance_metrics', {}),
-                        'next_disbursement': next_disb
-                    }
+                # Ensure award_amount is a float (handle Decimal)
+                amount = float(award.award_amount)
 
-                    if getattr(award, 'status', None) == 'completed':
-                        completed_awards.append(award_summary)
-                    elif getattr(award, 'status', None) == 'active':
-                        active_awards.append(award_summary)
+                total_awarded += amount
+
+                # Calculate disbursed amount safely
+                disbursed = 0.0
+                if disbursement_dates:
+                    valid_dates = [d for d in disbursement_dates if d <= end_date]
+                    if valid_dates:
+                        disbursed = sum(amount / len(disbursement_dates) for _ in valid_dates)
+                total_disbursed += disbursed
+
+                # Get recipient name from applicant relationship
+                recipient = award.applicant.name if award.applicant else 'Unknown'
+
+                # Determine next disbursement
+                next_disb = None
+                future_dates = [d for d in disbursement_dates if d > end_date]
+                if future_dates:
+                    next_disb = min(future_dates)
+
+                award_summary = {
+                    'scholarship': scholarship.name,
+                    'recipient': recipient,
+                    'amount': amount,
+                    'disbursed': disbursed,
+                    'award_date': award_date,
+                    'status': award.status,
+                    'requirements_met': award.requirements_met or [],
+                    'requirements_pending': award.requirements_pending or [],
+                    'performance_metrics': award.performance_metrics or {},
+                    'next_disbursement': next_disb
+                }
+
+                if award.status == 'completed':
+                    completed_awards.append(award_summary)
+                elif award.status == 'active':
+                    active_awards.append(award_summary)
 
         # Sort all dates
         upcoming_deadlines.sort(key=lambda x: x['deadline'])
@@ -1264,36 +1527,43 @@ class ReportEngine:
                 - Financial information
                 - Essay submissions and evaluations
         """
-        # Find all awards for the applicant
-        applicant_awards = []
+        # Find the applicant first
         applicant_data = None
+        if student_id:
+            try:
+                applicant_data = Applicant.objects.get(student_id=student_id)
+            except Applicant.DoesNotExist:
+                pass
+        elif netid:
+            try:
+                applicant_data = Applicant.objects.get(netid=netid)
+            except Applicant.DoesNotExist:
+                pass
         
-        for scholarship in self.scholarships:
-            if scholarship.awards:
-                for award in scholarship.awards:
-                    if ((student_id and award.applicant.student_id == student_id) or 
-                        (netid and award.applicant.netid == netid)):
-                        applicant_awards.append({
-                            'scholarship_name': award.scholarship_name,
-                            'award_amount': award.award_amount,
-                            'award_date': award.award_date,
-                            'status': award.status,
-                            'disbursements': [
-                                {'date': date, 'amount': award.award_amount / len(award.disbursement_dates)}
-                                for date in award.disbursement_dates
-                            ],
-                            'requirements_met': award.requirements_met,
-                            'requirements_pending': award.requirements_pending,
-                            'performance_metrics': award.performance_metrics,
-                            'essays_evaluation': award.essays_evaluation,
-                            'interview_notes': award.interview_notes,
-                            'committee_feedback': award.committee_feedback
-                        })
-                        if not applicant_data:
-                            applicant_data = award.applicant
-
         if not applicant_data:
             return None
+        
+        # Query all awards for this applicant directly from ScholarshipAward model
+        awards_queryset = ScholarshipAward.objects.filter(applicant=applicant_data)
+        
+        applicant_awards = []
+        for award in awards_queryset:
+            applicant_awards.append({
+                'scholarship_name': award.scholarship_name,
+                'award_amount': float(award.award_amount),
+                'award_date': award.award_date,
+                'status': award.status,
+                'disbursements': [
+                    {'date': date, 'amount': float(award.award_amount) / len(award.disbursement_dates) if award.disbursement_dates else float(award.award_amount)}
+                    for date in award.disbursement_dates
+                ],
+                'requirements_met': award.requirements_met,
+                'requirements_pending': award.requirements_pending,
+                'performance_metrics': award.performance_metrics,
+                'essays_evaluation': award.essays_evaluation,
+                'interview_notes': award.interview_notes,
+                'committee_feedback': award.committee_feedback
+            })
 
         # Compile comprehensive applicant report and parse any ISO date strings
         report = {
@@ -1313,10 +1583,10 @@ class ReportEngine:
             'achievements': self._parse_iso_dates(applicant_data.academic_achievements),
             'financial_info': applicant_data.financial_info,
             'essays': [{
-                'prompt': essay['prompt'],
-                'submission_date': self._parse_iso_dates(essay['submission_date']),
-                'content': essay['content']
-            } for essay in applicant_data.essays],
+                'prompt': essay.get('prompt', '') if isinstance(essay, dict) else '',
+                'submission_date': self._parse_iso_dates(essay.get('submission_date')) if isinstance(essay, dict) else None,
+                'content': essay.get('content', '') if isinstance(essay, dict) else str(essay)
+            } for essay in (applicant_data.essays if applicant_data.essays else [])],
             'scholarships': {
                 'total_awards': len(applicant_awards),
                 'total_amount': sum(award['award_amount'] for award in applicant_awards),
@@ -1599,28 +1869,43 @@ class ReportEngine:
 
         # Academic Achievements
         story.append(Paragraph("Academic Achievements", styles['Heading2']))
-        for achievement in report_data['achievements']:
-            story.append(Paragraph(
-                f"• {achievement['type']} - {achievement['date'].strftime('%Y-%m-%d')}",
-                styles['Normal']
-            ))
-            if 'description' in achievement:
-                story.append(Paragraph(f"  {achievement['description']}", styles['Normal']))
+        if report_data.get('achievements'):
+            for achievement in report_data['achievements']:
+                if isinstance(achievement, dict):
+                    achievement_type = achievement.get('type', 'Achievement')
+                    achievement_date = achievement.get('date')
+                    date_str = achievement_date.strftime('%Y-%m-%d') if hasattr(achievement_date, 'strftime') else str(achievement_date) if achievement_date else 'N/A'
+                    story.append(Paragraph(
+                        f"• {achievement_type} - {date_str}",
+                        styles['Normal']
+                    ))
+                    if achievement.get('description'):
+                        story.append(Paragraph(f"  {achievement['description']}", styles['Normal']))
+                else:
+                    story.append(Paragraph(f"• {str(achievement)}", styles['Normal']))
+        else:
+            story.append(Paragraph("No achievements recorded", styles['Normal']))
         story.append(Paragraph("<br/>", styles['Normal']))
 
         # Financial Information
         story.append(Paragraph("Financial Information", styles['Heading2']))
-        financial_info = report_data['financial_info']
-        story.append(Paragraph(f"FAFSA Submitted: {financial_info['fafsa_submitted']}", styles['Normal']))
-        story.append(Paragraph(f"Expected Family Contribution: ${financial_info['efc']:,}", styles['Normal']))
-        story.append(Paragraph(f"Household Income Range: {financial_info['household_income']}", styles['Normal']))
+        financial_info = report_data.get('financial_info', {})
+        if isinstance(financial_info, dict):
+            story.append(Paragraph(f"FAFSA Submitted: {financial_info.get('fafsa_submitted', 'N/A')}", styles['Normal']))
+            story.append(Paragraph(f"Expected Family Contribution: ${financial_info.get('efc', 0):,}", styles['Normal']))
+            story.append(Paragraph(f"Household Income Range: {financial_info.get('household_income', 'N/A')}", styles['Normal']))
+        else:
+            story.append(Paragraph("Financial information not available", styles['Normal']))
         story.append(Paragraph("<br/>", styles['Normal']))
 
         # Current Aid
-        if financial_info['current_aid']:
+        if isinstance(financial_info, dict) and financial_info.get('current_aid'):
             story.append(Paragraph("Current Financial Aid:", styles['Heading3']))
             for aid in financial_info['current_aid']:
-                story.append(Paragraph(f"• {aid['type']}: ${aid['amount']:,}", styles['Normal']))
+                if isinstance(aid, dict):
+                    story.append(Paragraph(f"• {aid.get('type', 'Aid')}: ${aid.get('amount', 0):,}", styles['Normal']))
+                else:
+                    story.append(Paragraph(f"• {str(aid)}", styles['Normal']))
         story.append(Paragraph("<br/>", styles['Normal']))
 
         # Scholarship Awards
@@ -1632,26 +1917,36 @@ class ReportEngine:
         ))
 
         for award in report_data['scholarships']['detailed_awards']:
-            story.append(Paragraph(f"Award: {award['scholarship_name']}", styles['Heading3']))
-            story.append(Paragraph(f"Amount: ${award['award_amount']:,}", styles['Normal']))
-            story.append(Paragraph(f"Status: {award['status']}", styles['Normal']))
-            story.append(Paragraph(f"Award Date: {award['award_date'].strftime('%Y-%m-%d')}", styles['Normal']))
+            story.append(Paragraph(f"Award: {award.get('scholarship_name', 'Unknown')}", styles['Heading3']))
+            story.append(Paragraph(f"Amount: ${award.get('award_amount', 0):,}", styles['Normal']))
+            story.append(Paragraph(f"Status: {award.get('status', 'N/A')}", styles['Normal']))
+            award_date = award.get('award_date')
+            if hasattr(award_date, 'strftime'):
+                story.append(Paragraph(f"Award Date: {award_date.strftime('%Y-%m-%d')}", styles['Normal']))
+            elif award_date:
+                story.append(Paragraph(f"Award Date: {str(award_date)}", styles['Normal']))
             
-            if award['essays_evaluation']:
+            if award.get('essays_evaluation'):
                 story.append(Paragraph("Essay Evaluations:", styles['Heading4']))
                 for eval in award['essays_evaluation']:
-                    story.append(Paragraph(
-                        f"• {eval['prompt']}: Score {eval['score']}/10 - {eval['feedback']}",
-                        styles['Normal']
-                    ))
+                    if isinstance(eval, dict):
+                        story.append(Paragraph(
+                            f"• {eval.get('prompt', 'Essay')}: Score {eval.get('score', 'N/A')}/10 - {eval.get('feedback', 'No feedback')}",
+                            styles['Normal']
+                        ))
+                    else:
+                        story.append(Paragraph(f"• {str(eval)}", styles['Normal']))
 
-            if award['committee_feedback']:
+            if award.get('committee_feedback'):
                 story.append(Paragraph("Committee Feedback:", styles['Heading4']))
                 for feedback in award['committee_feedback']:
-                    story.append(Paragraph(
-                        f"• {feedback['member']}: {feedback['comments']}",
-                        styles['Normal']
-                    ))
+                    if isinstance(feedback, dict):
+                        story.append(Paragraph(
+                            f"• {feedback.get('member', 'Member')}: {feedback.get('comments', 'No comments')}",
+                            styles['Normal']
+                        ))
+                    else:
+                        story.append(Paragraph(f"• {str(feedback)}", styles['Normal']))
             story.append(Paragraph("<br/>", styles['Normal']))
 
         doc.build(story)
@@ -2170,3 +2465,154 @@ def home(request):
             scholarship['donor'] = {'name': 'Unknown', 'contact': 'Not provided'}
     
     return render(request, 'reports_app/index.html', {'report': report_data})
+
+
+def request_information(request):
+    """View to handle reviewer requests for additional applicant information.
+    
+    Logs the request and provides feedback to the reviewer.
+    """
+    if request.method == 'POST':
+        try:
+            # Get form data
+            applicant_id = request.POST.get('applicant_id')
+            reviewer_name = request.POST.get('reviewer_name')
+            reviewer_email = request.POST.get('reviewer_email')
+            scholarship_name = request.POST.get('scholarship_name')
+            request_type = request.POST.get('request_type')
+            request_details = request.POST.get('request_details')
+            priority = request.POST.get('priority', 'medium')
+            
+            # Use the ReportEngine to log the request
+            engine = ReportEngine()
+            info_request = engine.log_information_request(
+                applicant_id=applicant_id,
+                reviewer_name=reviewer_name,
+                reviewer_email=reviewer_email,
+                scholarship_name=scholarship_name if scholarship_name else None,
+                request_type=request_type,
+                request_details=request_details,
+                priority=priority
+            )
+            
+            # Return success message
+            return HttpResponse(f"""
+                <html>
+                <head>
+                    <title>Request Submitted</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 2em; }}
+                        .success {{ background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 1em; border-radius: 4px; }}
+                        .details {{ background: #f8f9fa; padding: 1em; margin: 1em 0; border-radius: 4px; }}
+                        button {{ padding: 0.7em 1.5em; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 1em; }}
+                        button:hover {{ background: #0056b3; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>Request Submitted Successfully</h1>
+                    <div class="success">
+                        <p><strong>Your information request has been logged.</strong></p>
+                        <p>Request ID: #{info_request.id}</p>
+                        <p>Status: {info_request.status.title()}</p>
+                    </div>
+                    <div class="details">
+                        <h3>Request Details:</h3>
+                        <p><strong>Applicant ID:</strong> {applicant_id}</p>
+                        <p><strong>Reviewer:</strong> {reviewer_name}</p>
+                        <p><strong>Request Type:</strong> {request_type.replace('_', ' ').title()}</p>
+                        <p><strong>Priority:</strong> {priority.title()}</p>
+                        <p><strong>Submitted:</strong> {info_request.requested_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+                    </div>
+                    <button onclick="window.location.href='/'">Return to Reports</button>
+                </body>
+                </html>
+            """)
+            
+        except ValueError as e:
+            # Handle validation errors
+            return HttpResponse(f"""
+                <html>
+                <head>
+                    <title>Request Error</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 2em; }}
+                        .error {{ background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 1em; border-radius: 4px; }}
+                        button {{ padding: 0.7em 1.5em; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 1em; }}
+                        button:hover {{ background: #0056b3; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>Request Error</h1>
+                    <div class="error">
+                        <p><strong>Error:</strong> {str(e)}</p>
+                    </div>
+                    <button onclick="window.history.back()">Go Back</button>
+                    <button onclick="window.location.href='/'">Return to Reports</button>
+                </body>
+                </html>
+            """, status=400)
+            
+        except Exception as e:
+            # Handle unexpected errors
+            logger.error(f"Error processing information request: {str(e)}")
+            return HttpResponse(f"""
+                <html>
+                <head>
+                    <title>System Error</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 2em; }}
+                        .error {{ background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 1em; border-radius: 4px; }}
+                        button {{ padding: 0.7em 1.5em; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 1em; }}
+                        button:hover {{ background: #0056b3; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>System Error</h1>
+                    <div class="error">
+                        <p><strong>An unexpected error occurred:</strong> {str(e)}</p>
+                    </div>
+                    <button onclick="window.history.back()">Go Back</button>
+                    <button onclick="window.location.href='/'">Return to Reports</button>
+                </body>
+                </html>
+            """, status=500)
+    
+    # If not POST, redirect to home
+    from django.shortcuts import redirect
+    return redirect('reports_home')
+
+
+def view_request_logs(request):
+    """View to display all information requests in a table format.
+    
+    Shows all logged reviewer requests for additional applicant information.
+    """
+    # Get all information requests ordered by most recent first
+    all_requests = ReviewerInformationRequest.objects.all().order_by('-requested_at')
+    
+    # Apply filters if provided
+    status_filter = request.GET.get('status')
+    priority_filter = request.GET.get('priority')
+    applicant_filter = request.GET.get('applicant_id')
+    
+    if status_filter:
+        all_requests = all_requests.filter(status=status_filter)
+    if priority_filter:
+        all_requests = all_requests.filter(priority=priority_filter)
+    if applicant_filter:
+        all_requests = all_requests.filter(applicant__student_id__icontains=applicant_filter)
+    
+    # Get unique values for filter dropdowns
+    statuses = ReviewerInformationRequest.objects.values_list('status', flat=True).distinct()
+    priorities = ReviewerInformationRequest.objects.values_list('priority', flat=True).distinct()
+    
+    context = {
+        'requests': all_requests,
+        'statuses': statuses,
+        'priorities': priorities,
+        'current_status': status_filter,
+        'current_priority': priority_filter,
+        'current_applicant': applicant_filter,
+    }
+    
+    return render(request, 'reports_app/request_logs.html', context)

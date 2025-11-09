@@ -253,3 +253,47 @@ class Scholarship(models.Model):
             review_dates=review_dates,
             reporting_schedule=reporting_schedule
         )
+
+
+class ReviewerInformationRequest(models.Model):
+    """Model to log reviewer requests for additional applicant information.
+    
+    Tracks when reviewers need more information about applicants during the review process.
+    """
+    applicant = models.ForeignKey(Applicant, on_delete=models.CASCADE, related_name='information_requests')
+    reviewer_name = models.CharField(max_length=255)
+    reviewer_email = models.EmailField(null=True, blank=True)
+    scholarship_name = models.CharField(max_length=255, null=True, blank=True)
+    request_type = models.CharField(max_length=100)  # e.g., 'transcript', 'recommendation', 'essay_clarification'
+    request_details = models.TextField()  # Detailed description of what information is needed
+    priority = models.CharField(max_length=20, choices=[
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('urgent', 'Urgent')
+    ], default='medium')
+    status = models.CharField(max_length=20, choices=[
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('fulfilled', 'Fulfilled'),
+        ('cancelled', 'Cancelled')
+    ], default='pending')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    fulfilled_at = models.DateTimeField(null=True, blank=True)
+    fulfillment_notes = models.TextField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-requested_at']
+        verbose_name = 'Reviewer Information Request'
+        verbose_name_plural = 'Reviewer Information Requests'
+    
+    def __str__(self):
+        return f"{self.request_type} for {self.applicant.name} - {self.status}"
+    
+    def mark_fulfilled(self, notes: str = None):
+        """Mark the request as fulfilled with optional notes."""
+        self.status = 'fulfilled'
+        self.fulfilled_at = timezone.now()
+        if notes:
+            self.fulfillment_notes = notes
+        self.save()
