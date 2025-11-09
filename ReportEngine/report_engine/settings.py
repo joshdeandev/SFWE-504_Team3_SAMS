@@ -160,3 +160,46 @@ LOGGING = {
         },
     },
 }
+
+# Financial Aid System Integration Configuration
+# Implements requirement: The report engine shall support future integration with 
+# financial aid systems to automate or assist in payment processing.
+FINANCIAL_AID_SYSTEMS = {
+    # Example Banner configuration (disabled by default)
+    # To enable, set 'enabled': True and provide actual credentials
+    'banner': {
+        'type': 'banner',
+        'enabled': False,  # Set to True when ready to integrate
+        'base_url': 'https://banner.university.edu',  # Replace with actual URL
+        'api_key': '',  # Add API key from environment variable in production
+        'timeout': 30,
+        'retry_attempts': 3,
+        'retry_delay_seconds': 5,
+    },
+    
+    # Example Workday configuration (disabled by default)
+    'workday': {
+        'type': 'workday',
+        'enabled': False,  # Set to True when ready to integrate
+        'base_url': 'https://workday.university.edu',  # Replace with actual URL
+        'username': '',  # Add from environment variable in production
+        'password': '',  # Add from environment variable in production
+        'tenant': '',  # Workday tenant ID
+        'timeout': 30,
+    },
+    
+    # Add other financial aid systems as needed
+    # Example: PeopleSoft, Jenzabar, etc.
+}
+
+# Financial Aid Integration Settings
+FINANCIAL_AID_INTEGRATION = {
+    'default_system': 'banner',  # Default system to use
+    'auto_submit_enabled': False,  # Whether to automatically submit approved disbursements
+    'require_manual_approval': True,  # Require manual approval before submission
+    'batch_processing_enabled': True,  # Enable batch disbursement processing
+    'batch_size': 50,  # Maximum disbursements per batch
+    'export_directory': BASE_DIR / 'financial_aid_exports',  # Directory for export files
+    'archive_exports': True,  # Keep copies of exported files
+    'notification_emails': [],  # Email addresses to notify of disbursement status
+}

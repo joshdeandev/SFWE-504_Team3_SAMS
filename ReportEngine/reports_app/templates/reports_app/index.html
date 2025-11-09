@@ -260,6 +260,49 @@
         </div>
       </div>
 
+      <!-- Disbursement Report -->
+      <div class="report-section">
+        <h4>Disbursement Report</h4>
+        <p>Generate disbursement reports for selected scholarship recipients including payment schedules and completion status:</p>
+        <div class="donor-section">
+          <select id="scholarship-select" required>
+            <option value="">Select Scholarship</option>
+            {% for scholarship in report.scholarships %}
+              <option value="{{ scholarship.name }}">{{ scholarship.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="donor-export-buttons">
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="disbursement">
+              <input type="hidden" name="export_format" value="pdf">
+              <input type="hidden" name="scholarship_name" class="scholarship-name-input">
+              <button type="submit" class="donor-button pdf-button scholarship-button">
+                <i class="fa fa-file-pdf-o"></i> Download PDF Report
+              </button>
+            </form>
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="disbursement">
+              <input type="hidden" name="export_format" value="xlsx">
+              <input type="hidden" name="scholarship_name" class="scholarship-name-input">
+              <button type="submit" class="donor-button excel-button scholarship-button">
+                <i class="fa fa-file-excel-o"></i> Download Excel Report
+              </button>
+            </form>
+            <form method="post" class="donor-form">
+              {% csrf_token %}
+              <input type="hidden" name="report_type" value="disbursement">
+              <input type="hidden" name="export_format" value="csv">
+              <input type="hidden" name="scholarship_name" class="scholarship-name-input">
+              <button type="submit" class="donor-button csv-button scholarship-button">
+                <i class="fa fa-file-text-o"></i> Download CSV Report
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
       <!-- Request Additional Applicant Information -->
       <div class="report-section">
         <h4>Request Additional Applicant Information</h4>
@@ -368,8 +411,25 @@
           });
         });
         
+        // Update all scholarship name inputs when scholarship is selected
+        document.getElementById('scholarship-select').addEventListener('change', function() {
+          const scholarshipName = this.value;
+          const buttons = document.querySelectorAll('.scholarship-button');
+          const inputs = document.querySelectorAll('.scholarship-name-input');
+          
+          inputs.forEach(input => input.value = scholarshipName);
+          buttons.forEach(button => {
+            button.disabled = !scholarshipName;
+          });
+        });
+        
         // Initialize buttons as disabled
         document.querySelectorAll('.donor-button').forEach(button => {
+          button.disabled = true;
+        });
+        
+        // Initialize scholarship buttons as disabled
+        document.querySelectorAll('.scholarship-button').forEach(button => {
           button.disabled = true;
         });
       </script>

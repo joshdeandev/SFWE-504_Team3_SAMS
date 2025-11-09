@@ -1,7 +1,7 @@
 from django.db import models
 from django.utils import timezone
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, date
 
 
 class Applicant(models.Model):
@@ -336,5 +336,294 @@ class AwardDecision(models.Model):
             }
         )
         return obj
+
+
+class DisbursementTransaction(models.Model):
+    """
+    Model to track individual disbursement transactions.
+    
+    Supports integration with external financial aid systems by storing
+    transaction details, status, and external system references.
+    
+    Implements requirement: The report engine shall support future integration with 
+    financial aid systems to automate or assist in payment processing.
+    """
+    scholarship_award = models.ForeignKey(
+        ScholarshipAward, 
+        on_delete=models.CASCADE, 
+        related_name='disbursement_transactions'
+    )
+    
+    # Transaction details
+    transaction_id = models.CharField(max_length=255, unique=True, help_text='Internal transaction ID')
+    external_transaction_id = models.CharField(
+        max_length=255, 
+        null=True, 
+        blank=True, 
+        help_text='Transaction ID from external financial aid system'
+    )
+    
+    # Financial information
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    scheduled_date = models.DateField(help_text='Scheduled disbursement date')
+    processed_date = models.DateField(null=True, blank=True, help_text='Actual processing date')
+    
+    # Status tracking
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('pending_approval', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('submitted', 'Submitted to Financial Aid System'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+        ('on_hold', 'On Hold'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    
+    # Integration details
+    financial_aid_system = models.CharField(
+        max_length=100, 
+        null=True, 
+        blank=True,
+        help_text='Name of the financial aid system used (e.g., Banner, Workday)'
+    )
+    submission_payload = models.JSONField(
+        null=True, 
+        blank=True,
+        help_text='Data sent to external system'
+    )
+    response_data = models.JSONField(
+        null=True, 
+        blank=True,
+        help_text='Response received from external system'
+    )
+    
+    # Accounting information
+    account_code = models.CharField(max_length=50, null=True, blank=True)
+    fund_code = models.CharField(max_length=50, null=True, blank=True)
+    
+    # Error tracking
+    error_message = models.TextField(null=True, blank=True)
+    retry_count = models.IntegerField(default=0)
+    last_retry_at = models.DateTimeField(null=True, blank=True)
+    
+    # Audit trail
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.CharField(max_length=255, null=True, blank=True)
+    updated_by = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Notes
+    notes = models.TextField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-scheduled_date', '-created_at']
+        verbose_name = 'Disbursement Transaction'
+        verbose_name_plural = 'Disbursement Transactions'
+        indexes = [
+            models.Index(fields=['status', 'scheduled_date']),
+            models.Index(fields=['external_transaction_id']),
+            models.Index(fields=['scholarship_award', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.transaction_id} - {self.scholarship_award.scholarship_name} - ${self.amount} ({self.status})"
+    
+    def can_retry(self) -> bool:
+        """Check if this transaction can be retried."""
+        return self.status == 'failed' and self.retry_count < 3
+    
+    def mark_submitted(self, external_id: str, system_name: str):
+        """Mark transaction as submitted to external system."""
+        self.status = 'submitted'
+        self.external_transaction_id = external_id
+        self.financial_aid_system = system_name
+        self.save()
+    
+    def mark_completed(self, processed_date: date = None):
+        """Mark transaction as completed."""
+        self.status = 'completed'
+        self.processed_date = processed_date or timezone.now().date()
+        self.save()
+    
+    def mark_failed(self, error_message: str):
+        """Mark transaction as failed with error message."""
+        self.status = 'failed'
+        self.error_message = error_message
+        self.retry_count += 1
+        self.last_retry_at = timezone.now()
+        self.save()
+
+
+class FinancialAidSystemLog(models.Model):
+    """
+    Log of all interactions with external financial aid systems.
+    
+    Provides audit trail for integration activities.
+    """
+    
+    # Request information
+    system_name = models.CharField(max_length=100, help_text='Name of the financial aid system')
+    operation = models.CharField(max_length=100, help_text='Operation performed (e.g., submit_disbursement)')
+    request_timestamp = models.DateTimeField(auto_now_add=True)
+    
+    # Request/Response data
+    request_data = models.JSONField(null=True, blank=True)
+    response_data = models.JSONField(null=True, blank=True)
+    
+    # Status
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('failure', 'Failure'),
+        ('timeout', 'Timeout'),
+        ('error', 'Error'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    
+    # Related objects
+    transaction = models.ForeignKey(
+        DisbursementTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='system_logs'
+    )
+    
+    # Error details
+    error_message = models.TextField(null=True, blank=True)
+    http_status_code = models.IntegerField(null=True, blank=True)
+    
+    # Response time
+    response_time_ms = models.IntegerField(null=True, blank=True, help_text='Response time in milliseconds')
+    
+    class Meta:
+        ordering = ['-request_timestamp']
+        verbose_name = 'Financial Aid System Log'
+        verbose_name_plural = 'Financial Aid System Logs'
+        indexes = [
+            models.Index(fields=['system_name', 'status']),
+            models.Index(fields=['request_timestamp']),
+        ]
+    
+    def __str__(self):
+        return f"{self.system_name} - {self.operation} - {self.status} ({self.request_timestamp})"
+
+
+class PaymentSchedule(models.Model):
+    """
+    Model to manage payment schedules for scholarship awards.
+    
+    Allows for flexible payment scheduling and tracking.
+    """
+    scholarship_award = models.ForeignKey(
+        ScholarshipAward,
+        on_delete=models.CASCADE,
+        related_name='payment_schedules'
+    )
+    
+    # Schedule details
+    payment_number = models.IntegerField(help_text='Sequential payment number (1, 2, 3...)')
+    scheduled_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    scheduled_date = models.DateField()
+    
+    # Conditions for payment release
+    conditions_met = models.BooleanField(default=False)
+    required_conditions = models.JSONField(
+        default=list,
+        help_text='List of conditions that must be met (e.g., enrollment verification, GPA check)'
+    )
+    conditions_verified_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.CharField(max_length=255, null=True, blank=True)
+    
+    # Link to actual disbursement transaction
+    disbursement_transaction = models.OneToOneField(
+        DisbursementTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_schedule'
+    )
+    
+    # Status
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('conditions_not_met', 'Conditions Not Met'),
+        ('ready', 'Ready for Processing'),
+        ('scheduled', 'Scheduled'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='pending')
+    
+    # Notes
+    notes = models.TextField(null=True, blank=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['scholarship_award', 'payment_number']
+        verbose_name = 'Payment Schedule'
+        verbose_name_plural = 'Payment Schedules'
+        unique_together = ['scholarship_award', 'payment_number']
+    
+    def __str__(self):
+        return f"Payment {self.payment_number} - {self.scholarship_award.scholarship_name} - ${self.scheduled_amount}"
+    
+    def verify_conditions(self, verified_by: str = None) -> bool:
+        """
+        Verify that all required conditions are met.
+        
+        Returns:
+            True if all conditions are met, False otherwise
+        """
+        # This is a placeholder - actual implementation would check each condition
+        # against student records, enrollment status, etc.
+        
+        if not self.required_conditions:
+            self.conditions_met = True
+            self.status = 'ready'
+            self.conditions_verified_at = timezone.now()
+            self.verified_by = verified_by
+            self.save()
+            return True
+        
+        # In a real implementation, you would check each condition
+        # For now, we'll just return the current state
+        return self.conditions_met
+    
+    def create_disbursement_transaction(self) -> Optional[DisbursementTransaction]:
+        """
+        Create a disbursement transaction for this payment schedule.
+        
+        Returns:
+            DisbursementTransaction instance or None if conditions not met
+        """
+        if not self.conditions_met:
+            return None
+        
+        if self.disbursement_transaction:
+            return self.disbursement_transaction
+        
+        # Generate unique transaction ID
+        transaction_id = f"DISB-{self.scholarship_award.id}-{self.payment_number}-{timezone.now().strftime('%Y%m%d%H%M%S')}"
+        
+        transaction = DisbursementTransaction.objects.create(
+            scholarship_award=self.scholarship_award,
+            transaction_id=transaction_id,
+            amount=self.scheduled_amount,
+            scheduled_date=self.scheduled_date,
+            status='approved'
+        )
+        
+        self.disbursement_transaction = transaction
+        self.status = 'scheduled'
+        self.save()
+        
+        return transaction
 
     

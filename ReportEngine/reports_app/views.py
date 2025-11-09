@@ -739,6 +739,111 @@ END OF LOG
         """Add a new scholarship to the system."""
         self.scholarships.append(scholarship)
 
+    # Function to generate disbursement report. Meets requirement SFWE504_3-LLR-8.
+    def generate_disbursement_report(self, scholarship_name: str = None) -> Dict[str, Any]:
+        """Generate a disbursement report for scholarship recipients showing payment details.
+        
+        Args:
+            scholarship_name (str, optional): Specific scholarship to report on. If None, reports on all scholarships.
+            
+        Returns:
+            dict: Disbursement report containing:
+                - Recipient information
+                - Award amounts and disbursement schedules
+                - Payment dates and amounts
+                - Outstanding balances
+                - Requirements status
+                - Summary statistics
+        """
+        # Query scholarship awards
+        if scholarship_name:
+            awards_queryset = ScholarshipAward.objects.filter(scholarship_name=scholarship_name, status='active')
+        else:
+            awards_queryset = ScholarshipAward.objects.filter(status='active')
+        
+        # Build disbursement details for each award
+        disbursements = []
+        total_awarded = 0
+        total_disbursed = 0
+        total_pending = 0
+        
+        for award in awards_queryset:
+            applicant = award.applicant
+            award_amount = float(award.award_amount)
+            total_awarded += award_amount
+            
+            # Calculate disbursed and pending amounts
+            num_disbursements = len(award.disbursement_dates) if award.disbursement_dates else 1
+            amount_per_disbursement = award_amount / num_disbursements if num_disbursements > 0 else award_amount
+            
+            # Count past disbursements
+            today = datetime.now().date()
+            past_disbursements = []
+            future_disbursements = []
+            
+            if award.disbursement_dates:
+                for disburse_date in award.disbursement_dates:
+                    # Parse date if string
+                    if isinstance(disburse_date, str):
+                        try:
+                            disburse_date = datetime.fromisoformat(disburse_date).date()
+                        except:
+                            disburse_date = datetime.strptime(disburse_date, '%Y-%m-%d').date()
+                    elif isinstance(disburse_date, datetime):
+                        disburse_date = disburse_date.date()
+                    
+                    if disburse_date <= today:
+                        past_disbursements.append({
+                            'date': disburse_date,
+                            'amount': amount_per_disbursement
+                        })
+                    else:
+                        future_disbursements.append({
+                            'date': disburse_date,
+                            'amount': amount_per_disbursement
+                        })
+            
+            disbursed_amount = len(past_disbursements) * amount_per_disbursement
+            pending_amount = award_amount - disbursed_amount
+            
+            total_disbursed += disbursed_amount
+            total_pending += pending_amount
+            
+            disbursements.append({
+                'scholarship_name': award.scholarship_name,
+                'recipient_name': applicant.name,
+                'student_id': applicant.student_id,
+                'award_date': award.award_date,
+                'total_award_amount': award_amount,
+                'disbursed_amount': disbursed_amount,
+                'pending_amount': pending_amount,
+                'disbursement_schedule': {
+                    'total_payments': num_disbursements,
+                    'amount_per_payment': amount_per_disbursement,
+                    'completed_payments': past_disbursements,
+                    'upcoming_payments': future_disbursements
+                },
+                'requirements_met': award.requirements_met or [],
+                'requirements_pending': award.requirements_pending or [],
+                'status': award.status,
+                'notes': award.notes
+            })
+        
+        report = {
+            'generated_date': datetime.now(),
+            'scholarship_name': scholarship_name or 'All Scholarships',
+            'total_recipients': len(disbursements),
+            'summary': {
+                'total_awarded': total_awarded,
+                'total_disbursed': total_disbursed,
+                'total_pending': total_pending,
+                'disbursement_completion_rate': (total_disbursed / total_awarded * 100) if total_awarded > 0 else 0
+            },
+            'disbursements': disbursements
+        }
+        
+        return report
+
     # Function to generate pre-screening report. Meets requirement for pre-screening applicants, SFWE504_3-LLR-7, SFWE504_3-LLR-25, SFWE504_3-LLR-26.
     def generate_prescreening_report(self, applicants: List[Applicant], scholarship_id: Optional[str] = None) -> Dict[str, Any]:
         """Generate a pre-screening report identifying applicants who meet scholarship eligibility criteria.
@@ -1078,6 +1183,195 @@ END OF LOG
         }
         
         return report
+
+    def export_disbursement_report_to_pdf(self, scholarship_name: str = None, output_path: str = None) -> str:
+        """Export disbursement report to PDF format."""
+        report_data = self.generate_disbursement_report(scholarship_name)
+        
+        doc = SimpleDocTemplate(output_path, pagesize=letter)
+        story = []
+        styles = getSampleStyleSheet()
+
+        # Title
+        story.append(Paragraph(f"Disbursement Report: {report_data['scholarship_name']}", styles['Heading1']))
+        story.append(Paragraph(f"Generated on: {report_data['generated_date'].strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+        story.append(Paragraph("<br/>", styles['Normal']))
+
+        # Summary Section
+        story.append(Paragraph("Summary Statistics", styles['Heading2']))
+        summary_data = [
+            ['Total Recipients', str(report_data['total_recipients'])],
+            ['Total Awarded', f"${report_data['summary']['total_awarded']:,.2f}"],
+            ['Total Disbursed', f"${report_data['summary']['total_disbursed']:,.2f}"],
+            ['Total Pending', f"${report_data['summary']['total_pending']:,.2f}"],
+            ['Completion Rate', f"{report_data['summary']['disbursement_completion_rate']:.1f}%"]
+        ]
+        summary_table = Table(summary_data)
+        summary_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('BACKGROUND', (0, 0), (0, -1), colors.grey),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke)
+        ]))
+        story.append(summary_table)
+        story.append(Paragraph("<br/>", styles['Normal']))
+
+        # Disbursement Details
+        story.append(Paragraph("Recipient Disbursement Details", styles['Heading2']))
+        
+        for disbursement in report_data['disbursements']:
+            story.append(Paragraph(f"Recipient: {disbursement['recipient_name']} ({disbursement['student_id']})", styles['Heading3']))
+            story.append(Paragraph(f"Scholarship: {disbursement['scholarship_name']}", styles['Normal']))
+            
+            # Award details
+            detail_data = [
+                ['Award Date', disbursement['award_date'].strftime('%Y-%m-%d') if hasattr(disbursement['award_date'], 'strftime') else str(disbursement['award_date'])],
+                ['Total Award', f"${disbursement['total_award_amount']:,.2f}"],
+                ['Amount Disbursed', f"${disbursement['disbursed_amount']:,.2f}"],
+                ['Amount Pending', f"${disbursement['pending_amount']:,.2f}"],
+                ['Status', disbursement['status']]
+            ]
+            detail_table = Table(detail_data)
+            detail_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey)
+            ]))
+            story.append(detail_table)
+            story.append(Paragraph("<br/>", styles['Normal']))
+            
+            # Disbursement schedule
+            schedule = disbursement['disbursement_schedule']
+            story.append(Paragraph(f"Payment Schedule ({schedule['total_payments']} payments of ${schedule['amount_per_payment']:,.2f} each):", styles['Heading4']))
+            
+            if schedule['completed_payments']:
+                story.append(Paragraph("Completed Payments:", styles['Normal']))
+                for payment in schedule['completed_payments']:
+                    payment_date = payment['date']
+                    date_str = payment_date.strftime('%Y-%m-%d') if hasattr(payment_date, 'strftime') else str(payment_date)
+                    story.append(Paragraph(f"✓ {date_str}: ${payment['amount']:,.2f}", styles['Normal']))
+            
+            if schedule['upcoming_payments']:
+                story.append(Paragraph("Upcoming Payments:", styles['Normal']))
+                for payment in schedule['upcoming_payments']:
+                    payment_date = payment['date']
+                    date_str = payment_date.strftime('%Y-%m-%d') if hasattr(payment_date, 'strftime') else str(payment_date)
+                    story.append(Paragraph(f"○ {date_str}: ${payment['amount']:,.2f}", styles['Normal']))
+            
+            # Requirements
+            if disbursement['requirements_met'] or disbursement['requirements_pending']:
+                story.append(Paragraph("Requirements:", styles['Heading4']))
+                for req in disbursement['requirements_met']:
+                    story.append(Paragraph(f"✓ {req}", styles['Normal']))
+                for req in disbursement['requirements_pending']:
+                    story.append(Paragraph(f"□ {req}", styles['Normal']))
+            
+            if disbursement.get('notes'):
+                story.append(Paragraph(f"Notes: {disbursement['notes']}", styles['Normal']))
+            
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+        doc.build(story)
+        return output_path
+
+    def export_disbursement_report_to_excel(self, scholarship_name: str = None, output_path: str = None) -> str:
+        """Export disbursement report to Excel format."""
+        report_data = self.generate_disbursement_report(scholarship_name)
+        
+        wb = Workbook()
+        
+        # Summary Sheet
+        ws_summary = wb.active
+        ws_summary.title = "Summary"
+        ws_summary.cell(row=1, column=1, value=f"Disbursement Report: {report_data['scholarship_name']}").font = Font(bold=True, size=14)
+        ws_summary.cell(row=2, column=1, value=f"Generated: {report_data['generated_date'].strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        ws_summary.cell(row=4, column=1, value="Total Recipients").font = Font(bold=True)
+        ws_summary.cell(row=4, column=2, value=report_data['total_recipients'])
+        ws_summary.cell(row=5, column=1, value="Total Awarded").font = Font(bold=True)
+        ws_summary.cell(row=5, column=2, value=f"${report_data['summary']['total_awarded']:,.2f}")
+        ws_summary.cell(row=6, column=1, value="Total Disbursed").font = Font(bold=True)
+        ws_summary.cell(row=6, column=2, value=f"${report_data['summary']['total_disbursed']:,.2f}")
+        ws_summary.cell(row=7, column=1, value="Total Pending").font = Font(bold=True)
+        ws_summary.cell(row=7, column=2, value=f"${report_data['summary']['total_pending']:,.2f}")
+        ws_summary.cell(row=8, column=1, value="Completion Rate").font = Font(bold=True)
+        ws_summary.cell(row=8, column=2, value=f"{report_data['summary']['disbursement_completion_rate']:.1f}%")
+        
+        # Disbursements Sheet
+        ws_disbursements = wb.create_sheet("Disbursements")
+        headers = ['Scholarship', 'Recipient', 'Student ID', 'Award Date', 'Total Award', 'Disbursed', 'Pending', 'Status', 'Payments', 'Requirements Met', 'Requirements Pending']
+        for col, header in enumerate(headers, 1):
+            cell = ws_disbursements.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+        
+        for row_idx, disbursement in enumerate(report_data['disbursements'], 2):
+            ws_disbursements.cell(row=row_idx, column=1, value=disbursement['scholarship_name'])
+            ws_disbursements.cell(row=row_idx, column=2, value=disbursement['recipient_name'])
+            ws_disbursements.cell(row=row_idx, column=3, value=disbursement['student_id'])
+            award_date = disbursement['award_date']
+            date_str = award_date.strftime('%Y-%m-%d') if hasattr(award_date, 'strftime') else str(award_date)
+            ws_disbursements.cell(row=row_idx, column=4, value=date_str)
+            ws_disbursements.cell(row=row_idx, column=5, value=f"${disbursement['total_award_amount']:,.2f}")
+            ws_disbursements.cell(row=row_idx, column=6, value=f"${disbursement['disbursed_amount']:,.2f}")
+            ws_disbursements.cell(row=row_idx, column=7, value=f"${disbursement['pending_amount']:,.2f}")
+            ws_disbursements.cell(row=row_idx, column=8, value=disbursement['status'])
+            ws_disbursements.cell(row=row_idx, column=9, value=f"{len(disbursement['disbursement_schedule']['completed_payments'])}/{disbursement['disbursement_schedule']['total_payments']}")
+            ws_disbursements.cell(row=row_idx, column=10, value='; '.join(disbursement['requirements_met']))
+            ws_disbursements.cell(row=row_idx, column=11, value='; '.join(disbursement['requirements_pending']))
+        
+        # Adjust column widths
+        for ws in [ws_summary, ws_disbursements]:
+            for col in ws.columns:
+                max_length = 0
+                for cell in col:
+                    try:
+                        max_length = max(max_length, len(str(cell.value)))
+                    except:
+                        pass
+                ws.column_dimensions[chr(64 + col[0].column)].width = min(max_length + 2, 50)
+        
+        wb.save(output_path)
+        return output_path
+
+    def export_disbursement_report_to_csv(self, scholarship_name: str = None, output_path: str = None) -> str:
+        """Export disbursement report to CSV format."""
+        report_data = self.generate_disbursement_report(scholarship_name)
+        
+        import csv
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            # Header
+            writer.writerow([f"Disbursement Report: {report_data['scholarship_name']}"])
+            writer.writerow([f"Generated: {report_data['generated_date'].strftime('%Y-%m-%d %H:%M:%S')}"])
+            writer.writerow([])
+            
+            # Summary
+            writer.writerow(['Summary Statistics'])
+            writer.writerow(['Total Recipients', report_data['total_recipients']])
+            writer.writerow(['Total Awarded', f"${report_data['summary']['total_awarded']:,.2f}"])
+            writer.writerow(['Total Disbursed', f"${report_data['summary']['total_disbursed']:,.2f}"])
+            writer.writerow(['Total Pending', f"${report_data['summary']['total_pending']:,.2f}"])
+            writer.writerow(['Completion Rate', f"{report_data['summary']['disbursement_completion_rate']:.1f}%"])
+            writer.writerow([])
+            
+            # Disbursements
+            writer.writerow(['Scholarship', 'Recipient', 'Student ID', 'Award Date', 'Total Award', 'Disbursed', 'Pending', 'Status', 'Completed/Total Payments'])
+            for disbursement in report_data['disbursements']:
+                award_date = disbursement['award_date']
+                date_str = award_date.strftime('%Y-%m-%d') if hasattr(award_date, 'strftime') else str(award_date)
+                writer.writerow([
+                    disbursement['scholarship_name'],
+                    disbursement['recipient_name'],
+                    disbursement['student_id'],
+                    date_str,
+                    f"${disbursement['total_award_amount']:,.2f}",
+                    f"${disbursement['disbursed_amount']:,.2f}",
+                    f"${disbursement['pending_amount']:,.2f}",
+                    disbursement['status'],
+                    f"{len(disbursement['disbursement_schedule']['completed_payments'])}/{disbursement['disbursement_schedule']['total_payments']}"
+                ])
+        
+        return output_path
 
     def export_prescreening_report_to_pdf(self, applicants: List[Applicant], 
                                         scholarship_id: Optional[str] = None,
@@ -2360,6 +2654,130 @@ END OF LOG
                     ])
         return output_path
 
+    # Financial Aid System Integration Helper Methods
+    # Implements requirement: The report engine shall support future integration with 
+    # financial aid systems to automate or assist in payment processing.
+    # See SFWE504_3-LLR-29.
+    def export_financial_aid_data(self, scholarship_awards: List[ScholarshipAward], 
+                                  format: str = 'csv', 
+                                  system_type: str = 'banner') -> str:
+        """
+        Export disbursement data in formats compatible with financial aid systems.
+        
+        This is a convenience wrapper around the financial_integration module's export function.
+        
+        Args:
+            scholarship_awards: List of ScholarshipAward model instances to export
+            format: Export format ('csv', 'json', 'xml')
+            system_type: Target financial aid system ('banner', 'workday', etc.)
+        
+        Returns:
+            str: Path to the generated export file
+        
+        Example:
+            ```python
+            from reports_app.models import ScholarshipAward
+            
+            # Get awards to export
+            awards = ScholarshipAward.objects.filter(status='active')
+            
+            # Export for Banner system
+            csv_path = engine.export_financial_aid_data(
+                scholarship_awards=awards,
+                format='csv',
+                system_type='banner'
+            )
+            ```
+        """
+        from .financial_integration import generate_financial_aid_export
+        return generate_financial_aid_export(scholarship_awards, format, system_type)
+    
+    def submit_disbursements_to_financial_aid_system(self, 
+                                                     scholarship_awards: List[ScholarshipAward],
+                                                     system_name: str = None) -> List[Dict[str, Any]]:
+        """
+        Submit disbursement transactions to the configured financial aid system.
+        
+        Args:
+            scholarship_awards: List of ScholarshipAward instances to process
+            system_name: Specific financial aid system to use (uses default if None)
+        
+        Returns:
+            List of result dictionaries with success/failure status
+        
+        Example:
+            ```python
+            # Submit approved disbursements
+            from reports_app.models import ScholarshipAward
+            
+            awards = ScholarshipAward.objects.filter(status='active')
+            results = engine.submit_disbursements_to_financial_aid_system(awards)
+            
+            for result in results:
+                if result['success']:
+                    print(f"Submitted: {result['transaction_id']}")
+                else:
+                    print(f"Failed: {result['message']}")
+            ```
+        """
+        from .financial_integration import FinancialAidIntegrationManager
+        from .models import DisbursementTransaction
+        from datetime import date
+        
+        manager = FinancialAidIntegrationManager()
+        results = []
+        
+        for award in scholarship_awards:
+            # Parse disbursement dates
+            disbursement_dates = award.disbursement_dates
+            if isinstance(disbursement_dates, str):
+                import json
+                disbursement_dates = json.loads(disbursement_dates)
+            
+            # Create disbursement for each scheduled date
+            for i, disb_date in enumerate(disbursement_dates):
+                if isinstance(disb_date, str):
+                    from datetime import datetime as dt
+                    disb_date = dt.fromisoformat(disb_date).date()
+                
+                amount_per_disbursement = award.award_amount / len(disbursement_dates)
+                
+                # Create or get disbursement transaction
+                transaction_id = f"DISB-{award.id}-{i+1}"
+                transaction, created = DisbursementTransaction.objects.get_or_create(
+                    transaction_id=transaction_id,
+                    defaults={
+                        'scholarship_award': award,
+                        'amount': amount_per_disbursement,
+                        'scheduled_date': disb_date,
+                        'status': 'approved'
+                    }
+                )
+                
+                # Submit if not already submitted
+                if transaction.status in ['approved', 'failed']:
+                    disbursement_data = {
+                        'student_id': award.applicant.student_id,
+                        'amount': transaction.amount,
+                        'scholarship_name': award.scholarship_name,
+                        'disbursement_date': transaction.scheduled_date,
+                        'reference_number': transaction.transaction_id,
+                    }
+                    
+                    result = manager.submit_batch_disbursements([disbursement_data], system_name)
+                    results.extend(result)
+                    
+                    # Update transaction status
+                    if result[0]['success']:
+                        transaction.mark_submitted(
+                            external_id=result[0]['transaction_id'],
+                            system_name=system_name or 'default'
+                        )
+                    else:
+                        transaction.mark_failed(result[0].get('message', 'Unknown error'))
+        
+        return results
+
 
 import logging
 
@@ -2650,6 +3068,30 @@ def home(request):
                     else:
                         raise ValueError(f"Unsupported export format for applicant report: {export_format}")
                     filename = f'applicant_report.{export_format}'
+                elif report_type == 'disbursement':
+                    # Get scholarship name from request
+                    scholarship_name = request.POST.get('scholarship_name')
+                    if export_format == 'pdf':
+                        output_path = engine.export_disbursement_report_to_pdf(
+                            scholarship_name=scholarship_name,
+                            output_path=temp_file.name
+                        )
+                        content_type = 'application/pdf'
+                    elif export_format == 'xlsx':
+                        output_path = engine.export_disbursement_report_to_excel(
+                            scholarship_name=scholarship_name,
+                            output_path=temp_file.name
+                        )
+                        content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    elif export_format == 'csv':
+                        output_path = engine.export_disbursement_report_to_csv(
+                            scholarship_name=scholarship_name,
+                            output_path=temp_file.name
+                        )
+                        content_type = 'text/csv'
+                    else:
+                        raise ValueError(f"Unsupported export format for disbursement report: {export_format}")
+                    filename = f'disbursement_report.{export_format}'
                 elif report_type == 'prescreening':
                     # For demo purposes, we'll create a list of sample applicants with varying completion levels
                     sample_applicants = [
