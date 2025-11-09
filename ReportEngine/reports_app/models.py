@@ -297,3 +297,44 @@ class ReviewerInformationRequest(models.Model):
         if notes:
             self.fulfillment_notes = notes
         self.save()
+
+
+class AwardDecision(models.Model):
+    """Simple award decision model (replacement for previous committee decision complexity).
+
+    Stores whether an applicant is awarded a specific scholarship and optional comments.
+    One decision per applicant per scholarship. No vote tracking.
+    """
+    applicant = models.ForeignKey(Applicant, on_delete=models.CASCADE, related_name='award_decisions')
+    scholarship_name = models.CharField(max_length=255)
+    decision = models.CharField(max_length=20, choices=[
+        ('awarded', 'Awarded'),
+        ('not_awarded', 'Not Awarded'),
+        ('pending', 'Pending')
+    ], default='pending')
+    comments = models.TextField(null=True, blank=True, help_text='Additional reviewer/committee comments')
+    decided_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['applicant', 'scholarship_name']
+        ordering = ['-decided_at']
+        verbose_name = 'Award Decision'
+        verbose_name_plural = 'Award Decisions'
+
+    def __str__(self):
+        return f"{self.applicant.name} - {self.scholarship_name} ({self.decision})"
+
+    @classmethod
+    def record(cls, applicant: Applicant, scholarship_name: str, decision: str, comments: str = None):
+        obj, _ = cls.objects.update_or_create(
+            applicant=applicant,
+            scholarship_name=scholarship_name,
+            defaults={
+                'decision': decision,
+                'comments': comments
+            }
+        )
+        return obj
+
+    

@@ -1,0 +1,800 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Pre-screening Report - Award Scholarships</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 2em; 
+            background-color: #f5f7fa;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2em;
+            border-radius: 8px;
+            margin-bottom: 2em;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header h1 {
+            margin: 0 0 0.5em 0;
+        }
+        .summary-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1em;
+            margin-bottom: 2em;
+        }
+        .stat-card {
+            background: white;
+            padding: 1.5em;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+        .stat-card h3 {
+            margin: 0 0 0.5em 0;
+            color: #667eea;
+            font-size: 0.9em;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #2d3748;
+        }
+        .scholarship-section {
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 2em;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .scholarship-header {
+            background: #667eea;
+            color: white;
+            padding: 1.5em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .scholarship-header h2 {
+            margin: 0;
+        }
+        .match-count {
+            background: rgba(255,255,255,0.2);
+            padding: 0.5em 1em;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+        .applicant-card {
+            padding: 1.5em;
+            border-bottom: 1px solid #e2e8f0;
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            gap: 1.5em;
+            align-items: start;
+        }
+        .applicant-card:last-child {
+            border-bottom: none;
+        }
+        .applicant-card:hover {
+            background-color: #f7fafc;
+        }
+        .applicant-info h3 {
+            margin: 0 0 0.5em 0;
+            color: #2d3748;
+        }
+        .applicant-details {
+            color: #718096;
+            font-size: 0.9em;
+        }
+        .applicant-details p {
+            margin: 0.3em 0;
+        }
+        .qualification-badge {
+            display: inline-block;
+            padding: 0.3em 0.8em;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-top: 0.5em;
+        }
+        .badge-high {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .badge-medium {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .decision-status {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5em;
+        }
+        .status-badge {
+            padding: 0.5em 1em;
+            border-radius: 6px;
+            font-weight: bold;
+            text-align: center;
+            font-size: 0.9em;
+        }
+        .status-awarded {
+            background-color: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+        .status-not-awarded {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+        .status-pending {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 2px solid #ffeaa7;
+        }
+        .status-none {
+            background-color: #e2e8f0;
+            color: #4a5568;
+            border: 2px solid #cbd5e0;
+        }
+        .decision-comments {
+            font-size: 0.85em;
+            color: #4a5568;
+            font-style: italic;
+            margin-top: 0.5em;
+            padding: 0.5em;
+            background-color: #f7fafc;
+            border-radius: 4px;
+        }
+        .decision-date {
+            font-size: 0.8em;
+            color: #718096;
+            margin-top: 0.3em;
+        }
+        .award-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5em;
+        }
+        .award-btn {
+            padding: 0.6em 1em;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5em;
+            font-size: 0.9em;
+        }
+        .award-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .btn-award {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-award:hover {
+            background-color: #218838;
+        }
+        .btn-decline {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-decline:hover {
+            background-color: #c82333;
+        }
+        .btn-pending {
+            background-color: #ffc107;
+            color: #000;
+        }
+        .btn-pending:hover {
+            background-color: #e0a800;
+        }
+        .no-matches {
+            padding: 3em;
+            text-align: center;
+            color: #718096;
+        }
+        .no-matches i {
+            font-size: 3em;
+            margin-bottom: 0.5em;
+            opacity: 0.3;
+        }
+        
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        .modal-content {
+            background: white;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 0;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            position: relative;
+        }
+        .modal-header {
+            padding: 1.5em;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px 12px 0 0;
+        }
+        .modal-header h3 {
+            margin: 0;
+        }
+        .modal-close {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+        .modal-close:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .modal-body {
+            padding: 2em;
+        }
+        .form-group {
+            margin-bottom: 1.5em;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5em;
+            font-weight: bold;
+            color: #2d3748;
+        }
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75em;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            resize: vertical;
+            font-family: Arial, sans-serif;
+            font-size: 0.95em;
+        }
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .form-group input[type="number"] {
+            width: 100%;
+            padding: 0.75em;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 0.95em;
+        }
+        .form-group input[type="number"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        .modal-footer {
+            padding: 1.5em;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 1em;
+            justify-content: flex-end;
+        }
+        .btn-cancel {
+            background-color: #6c757d;
+            color: white;
+            padding: 0.75em 1.5em;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-cancel:hover {
+            background-color: #5a6268;
+        }
+        .btn-submit {
+            background-color: #667eea;
+            color: white;
+            padding: 0.75em 1.5em;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-submit:hover {
+            background-color: #5568d3;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 1em;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .export-section {
+            background: white;
+            padding: 1.5em;
+            border-radius: 8px;
+            margin-bottom: 2em;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .export-buttons {
+            display: flex;
+            gap: 1em;
+            flex-wrap: wrap;
+        }
+        .export-btn {
+            padding: 0.7em 1.5em;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 0.5em;
+        }
+        .export-btn-pdf {
+            background-color: #dc3545;
+        }
+        .export-btn-csv {
+            background-color: #007bff;
+        }
+        .export-btn-excel {
+            background-color: #28a745;
+        }
+    </style>
+</head>
+<body>
+    <a href="{% url 'reports_home' %}" class="back-link">
+        <i class="fa fa-arrow-left"></i> Back to Reports Home
+    </a>
+
+    <div class="header">
+        <h1><i class="fa fa-graduation-cap"></i> Pre-screening Report - Award Scholarships</h1>
+        <p>Generated: {{ generated_date|date:"F d, Y g:i A" }}</p>
+    </div>
+
+    {% if messages %}
+    <div style="margin: 1em 0;">
+        {% for message in messages %}
+        <div style="background: #d4edda; border: 1px solid #c3e6cb; color: #155724; padding: 0.75em 1em; border-radius: 6px; margin-bottom: 0.5em; display: flex; align-items: center; gap: 0.5em;">
+            <i class="fa fa-check-circle"></i>
+            <span>{{ message }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="summary-stats">
+        <div class="stat-card">
+            <h3>Total Applicants</h3>
+            <div class="value">{{ total_applicants }}</div>
+        </div>
+        <div class="stat-card">
+            <h3>Total Matches</h3>
+            <div class="value">{{ report.summary.total_matches }}</div>
+        </div>
+        <div class="stat-card">
+            <h3>Scholarships</h3>
+            <div class="value">{{ report.scholarships_evaluated }}</div>
+        </div>
+        <div class="stat-card">
+            <h3>Awarded</h3>
+            <div class="value" style="color: #28a745;">{{ report.summary.award_decisions.awarded }}</div>
+        </div>
+        <div class="stat-card">
+            <h3>Pending</h3>
+            <div class="value" style="color: #ffc107;">{{ report.summary.award_decisions.pending }}</div>
+        </div>
+    </div>
+
+    <div class="export-section">
+        <h3><i class="fa fa-download"></i> Export Report</h3>
+        <div class="export-buttons">
+            <form method="post" action="{% url 'reports_home' %}" style="margin: 0;">
+                {% csrf_token %}
+                <input type="hidden" name="report_type" value="prescreening">
+                <input type="hidden" name="export_format" value="pdf">
+                <button type="submit" class="export-btn export-btn-pdf">
+                    <i class="fa fa-file-pdf-o"></i> Download PDF
+                </button>
+            </form>
+            <form method="post" action="{% url 'reports_home' %}" style="margin: 0;">
+                {% csrf_token %}
+                <input type="hidden" name="report_type" value="prescreening">
+                <input type="hidden" name="export_format" value="csv">
+                <button type="submit" class="export-btn export-btn-csv">
+                    <i class="fa fa-file-text-o"></i> Download CSV
+                </button>
+            </form>
+            <form method="post" action="{% url 'reports_home' %}" style="margin: 0;">
+                {% csrf_token %}
+                <input type="hidden" name="report_type" value="prescreening">
+                <input type="hidden" name="export_format" value="xlsx">
+                <button type="submit" class="export-btn export-btn-excel">
+                    <i class="fa fa-file-excel-o"></i> Download Excel
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Available Scholarships Section -->
+    <div class="export-section" style="background: #fff3cd;">
+        <h3><i class="fa fa-trophy"></i> Available Scholarships ({{ scholarships|length }})</h3>
+        <p style="margin-bottom: 1em; color: #856404;">These scholarships are available to award. Once awarded, they will be removed from this list. Click "Award Scholarship" to select an applicant.</p>
+        {% if scholarships %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1em;">
+            {% for scholarship in scholarships %}
+            <div style="background: white; padding: 1em; border-radius: 6px; border-left: 4px solid #ffc107; position: relative;">
+                <h4 style="margin: 0 0 0.5em 0; color: #2d3748;">{{ scholarship.name }}</h4>
+                <p style="margin: 0.3em 0; color: #4a5568; font-size: 0.9em;">
+                    <strong>Amount:</strong> <span style="color: #28a745; font-weight: bold;">${{ scholarship.amount|floatformat:2 }}</span>
+                </p>
+                <p style="margin: 0.3em 0; color: #4a5568; font-size: 0.9em;">
+                    <strong>Frequency:</strong> {{ scholarship.frequency|title }}
+                </p>
+                {% if scholarship.deadline %}
+                <p style="margin: 0.3em 0; color: #4a5568; font-size: 0.9em;">
+                    <strong>Deadline:</strong> {{ scholarship.deadline|date:"M d, Y" }}
+                </p>
+                {% endif %}
+                <button class="award-btn btn-award" style="width: 100%; margin-top: 1em;" onclick="openScholarshipAwardModal('{{ scholarship.name }}', '{{ scholarship.amount }}')">
+                    <i class="fa fa-trophy"></i> Award Scholarship
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="background: white; padding: 2em; border-radius: 6px; text-align: center; color: #718096;">
+            <i class="fa fa-check-circle" style="font-size: 3em; margin-bottom: 0.5em; color: #28a745;"></i>
+            <h3>All Scholarships Have Been Awarded</h3>
+            <p>There are no available scholarships to award at this time.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if report.matches %}
+        {% for scholarship_match in report.matches %}
+        <div class="scholarship-section">
+            <div class="scholarship-header">
+                <h2>{{ scholarship_match.scholarship_name }}</h2>
+                <div class="match-count">
+                    <i class="fa fa-users"></i> {{ scholarship_match.matches|length }} Qualified Applicant{{ scholarship_match.matches|length|pluralize }}
+                </div>
+            </div>
+
+            {% for match in scholarship_match.matches %}
+            <div class="applicant-card">
+                <div class="applicant-info">
+                    <h3>{{ match.applicant.name }}</h3>
+                    <div class="applicant-details">
+                        <p><strong>Student ID:</strong> {{ match.applicant.student_id }}</p>
+                        <p><strong>Major:</strong> {{ match.applicant.major }}</p>
+                        <p><strong>GPA:</strong> {{ match.applicant.gpa }}</p>
+                        <p><strong>Academic Level:</strong> {{ match.applicant.academic_level }}</p>
+                    </div>
+                    <span class="qualification-badge {% if match.qualification_score >= 80 %}badge-high{% else %}badge-medium{% endif %}">
+                        Qualification: {{ match.qualification_score }}%
+                    </span>
+                </div>
+
+                <div class="decision-status">
+                    {% if match.current_decision %}
+                        {% if match.current_decision.decision == 'awarded' %}
+                            <div class="status-badge status-awarded">
+                                <i class="fa fa-check-circle"></i> AWARDED
+                            </div>
+                        {% elif match.current_decision.decision == 'not_awarded' %}
+                            <div class="status-badge status-not-awarded">
+                                <i class="fa fa-times-circle"></i> NOT AWARDED
+                            </div>
+                        {% else %}
+                            <div class="status-badge status-pending">
+                                <i class="fa fa-clock-o"></i> PENDING
+                            </div>
+                        {% endif %}
+                        {% if match.current_decision.comments %}
+                            <div class="decision-comments">
+                                "{{ match.current_decision.comments }}"
+                            </div>
+                        {% endif %}
+                        <div class="decision-date">
+                            {{ match.current_decision.decided_at|date:"M d, Y g:i A" }}
+                        </div>
+                    {% else %}
+                        <div class="status-badge status-none">
+                            <i class="fa fa-question-circle"></i> NO DECISION
+                        </div>
+                    {% endif %}
+                </div>
+
+                <div class="award-actions">
+                    <button class="award-btn btn-award" onclick="openAwardModal('{{ match.applicant.student_id }}', '{{ scholarship_match.scholarship_name }}', 'awarded', '{{ match.applicant.name }}')">
+                        <i class="fa fa-trophy"></i> Award
+                    </button>
+                    <button class="award-btn btn-decline" onclick="openAwardModal('{{ match.applicant.student_id }}', '{{ scholarship_match.scholarship_name }}', 'not_awarded', '{{ match.applicant.name }}')">
+                        <i class="fa fa-times"></i> Decline
+                    </button>
+                    <button class="award-btn btn-pending" onclick="openAwardModal('{{ match.applicant.student_id }}', '{{ scholarship_match.scholarship_name }}', 'pending', '{{ match.applicant.name }}')">
+                        <i class="fa fa-clock-o"></i> Pending
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="scholarship-section">
+            <div class="no-matches">
+                <i class="fa fa-search"></i>
+                <h2>No Qualified Applicants Found</h2>
+                <p>No applicants currently meet the scholarship eligibility criteria.</p>
+            </div>
+        </div>
+    {% endif %}
+
+    <!-- Award Decision Modal -->
+    <div id="awardModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Award Decision</h3>
+                <button class="modal-close" onclick="closeAwardModal()">×</button>
+            </div>
+            <form id="awardForm" method="post" action="{% url 'award_scholarship' %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <input type="hidden" name="applicant_id" id="applicant_id">
+                    <input type="hidden" name="decision" id="decision">
+                    
+                    <p><strong>Applicant:</strong> <span id="applicant_name"></span></p>
+                    
+                    <div class="form-group">
+                        <label for="scholarship_name">Scholarship:</label>
+                        <select name="scholarship_name" id="scholarship_name" required onchange="updateScholarshipAmount()">
+                            <option value="" id="default_scholarship_option">Select Scholarship</option>
+                            {% for scholarship in all_scholarships %}
+                            <option value="{{ scholarship.name }}" data-amount="{{ scholarship.amount }}">
+                                {{ scholarship.name }} - ${{ scholarship.amount|floatformat:2 }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <p><strong>Decision:</strong> <span id="decision_display"></span></p>
+                    
+                    <div class="form-group">
+                        <label for="comments">Comments (Optional):</label>
+                        <textarea name="comments" id="comments" rows="4" placeholder="Add any notes or comments about this decision..."></textarea>
+                    </div>
+                    
+                    <div class="form-group" id="award_amount_group" style="display: none;">
+                        <label for="award_amount">Award Amount ($):</label>
+                        <input type="number" name="award_amount" id="award_amount" step="0.01" min="0" placeholder="5000.00">
+                        <small style="color: #718096; display: block; margin-top: 0.3em;">Leave blank to use scholarship's default amount</small>
+                    </div>
+                    
+                    <div class="checkbox-group" id="create_award_group" style="display: none;">
+                        <input type="checkbox" name="create_award" id="create_award" value="yes">
+                        <label for="create_award" style="margin: 0;">Create ScholarshipAward record</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeAwardModal()">Cancel</button>
+                    <button type="submit" class="btn-submit">
+                        <i class="fa fa-save"></i> Save Decision
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scholarship Award Modal (for awarding from Available Scholarships section) -->
+    <div id="scholarshipAwardModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Award Scholarship to Applicant</h3>
+                <button class="modal-close" onclick="closeScholarshipAwardModal()">×</button>
+            </div>
+            <form id="scholarshipAwardForm" method="post" action="{% url 'award_scholarship' %}">
+                {% csrf_token %}
+                <div class="modal-body">
+                    <input type="hidden" name="scholarship_name" id="scholarship_award_name">
+                    <input type="hidden" name="decision" value="awarded">
+                    
+                    <p><strong>Scholarship:</strong> <span id="scholarship_display_name"></span></p>
+                    <p><strong>Amount:</strong> $<span id="scholarship_display_amount"></span></p>
+                    
+                    <div class="form-group">
+                        <label for="applicant_select">Select Applicant:</label>
+                        <select name="applicant_id" id="applicant_select" required>
+                            <option value="">Choose an applicant...</option>
+                            {% for applicant in all_applicants %}
+                                <option value="{{ applicant.student_id }}"
+                                        data-name="{{ applicant.name }}"
+                                        data-major="{{ applicant.major }}"
+                                        data-gpa="{{ applicant.gpa }}">
+                                    {{ applicant.name }} ({{ applicant.student_id }}) - GPA: {{ applicant.gpa }}
+                                </option>
+                            {% empty %}
+                                <option value="" disabled>No applicants found</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="scholarship_comments">Comments (Optional):</label>
+                        <textarea name="comments" id="scholarship_comments" rows="4" placeholder="Add any notes about this award..."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="scholarship_award_amount">Award Amount ($):</label>
+                        <input type="number" name="award_amount" id="scholarship_award_amount" step="0.01" min="0" placeholder="5000.00">
+                        <small style="color: #718096; display: block; margin-top: 0.3em;">Leave blank to use scholarship's default amount</small>
+                    </div>
+                    
+                    <div class="checkbox-group">
+                        <input type="checkbox" name="create_award" id="scholarship_create_award" value="yes" checked>
+                        <label for="scholarship_create_award" style="margin: 0;">Create ScholarshipAward record</label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeScholarshipAwardModal()">Cancel</button>
+                    <button type="submit" class="btn-submit">
+                        <i class="fa fa-trophy"></i> Award Scholarship
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function openAwardModal(applicantId, scholarshipName, decision, applicantName) {
+            const modal = document.getElementById('awardModal');
+            const decisionDisplayMap = {
+                'awarded': '<span style="color: #28a745;"><i class="fa fa-check-circle"></i> AWARDED</span>',
+                'not_awarded': '<span style="color: #dc3545;"><i class="fa fa-times-circle"></i> NOT AWARDED</span>',
+                'pending': '<span style="color: #ffc107;"><i class="fa fa-clock-o"></i> PENDING</span>'
+            };
+            
+            document.getElementById('applicant_id').value = applicantId;
+            document.getElementById('decision').value = decision;
+            document.getElementById('applicant_name').textContent = applicantName;
+            document.getElementById('decision_display').innerHTML = decisionDisplayMap[decision] || decision;
+            
+            // Set the scholarship dropdown to the current scholarship
+            const scholarshipSelect = document.getElementById('scholarship_name');
+            scholarshipSelect.value = scholarshipName;
+            
+            // Update default option text to show which scholarship the applicant qualified for
+            const defaultOption = document.getElementById('default_scholarship_option');
+            if (scholarshipName) {
+                defaultOption.textContent = scholarshipName + ' (Qualified) - or select another';
+                defaultOption.value = scholarshipName;
+            } else {
+                defaultOption.textContent = 'Select Scholarship';
+                defaultOption.value = '';
+            }
+            
+            // Show award amount and create award checkbox only for 'awarded' decision
+            const awardAmountGroup = document.getElementById('award_amount_group');
+            const createAwardGroup = document.getElementById('create_award_group');
+            if (decision === 'awarded') {
+                awardAmountGroup.style.display = 'block';
+                createAwardGroup.style.display = 'flex';
+                document.getElementById('create_award').checked = true;
+                updateScholarshipAmount();
+            } else {
+                awardAmountGroup.style.display = 'none';
+                createAwardGroup.style.display = 'none';
+                document.getElementById('create_award').checked = false;
+            }
+            
+            // Update modal title based on decision
+            const titleMap = {
+                'awarded': 'Award Scholarship',
+                'not_awarded': 'Decline Scholarship',
+                'pending': 'Set as Pending'
+            };
+            document.getElementById('modalTitle').textContent = titleMap[decision] || 'Award Decision';
+            
+            // Clear comments and amount
+            document.getElementById('comments').value = '';
+            document.getElementById('award_amount').value = '';
+            
+            modal.style.display = 'block';
+        }
+        
+        function updateScholarshipAmount() {
+            const scholarshipSelect = document.getElementById('scholarship_name');
+            const selectedOption = scholarshipSelect.options[scholarshipSelect.selectedIndex];
+            const amount = selectedOption.getAttribute('data-amount');
+            
+            if (amount) {
+                document.getElementById('award_amount').placeholder = parseFloat(amount).toFixed(2);
+            }
+        }
+        
+        function closeAwardModal() {
+            document.getElementById('awardModal').style.display = 'none';
+        }
+        
+        function openScholarshipAwardModal(scholarshipName, scholarshipAmount) {
+            const modal = document.getElementById('scholarshipAwardModal');
+            
+            document.getElementById('scholarship_award_name').value = scholarshipName;
+            document.getElementById('scholarship_display_name').textContent = scholarshipName;
+            document.getElementById('scholarship_display_amount').textContent = parseFloat(scholarshipAmount).toFixed(2);
+            document.getElementById('scholarship_award_amount').placeholder = parseFloat(scholarshipAmount).toFixed(2);
+            
+            // Clear form
+            document.getElementById('applicant_select').value = '';
+            document.getElementById('scholarship_comments').value = '';
+            document.getElementById('scholarship_award_amount').value = '';
+            document.getElementById('scholarship_create_award').checked = true;
+            
+            modal.style.display = 'block';
+        }
+        
+        function closeScholarshipAwardModal() {
+            document.getElementById('scholarshipAwardModal').style.display = 'none';
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const awardModal = document.getElementById('awardModal');
+            const scholarshipModal = document.getElementById('scholarshipAwardModal');
+            
+            if (event.target === awardModal) {
+                closeAwardModal();
+            }
+            if (event.target === scholarshipModal) {
+                closeScholarshipAwardModal();
+            }
+        }
+        
+        // Handle form submission
+        document.getElementById('awardForm').addEventListener('submit', function(e) {
+            // Form will submit normally, but we could add validation here if needed
+        });
+    </script>
+</body>
+</html>

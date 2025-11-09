@@ -1,5 +1,11 @@
 from django.contrib import admin
-from .models import Applicant, ReviewerInformationRequest
+from .models import (
+	Applicant,
+	ReviewerInformationRequest,
+	Scholarship,
+	ScholarshipAward,
+	AwardDecision,
+)
 
 
 @admin.register(Applicant)
@@ -30,3 +36,30 @@ class ReviewerInformationRequestAdmin(admin.ModelAdmin):
 			'fields': ('requested_at', 'fulfilled_at', 'fulfillment_notes')
 		}),
 	)
+
+
+@admin.register(Scholarship)
+class ScholarshipAdmin(admin.ModelAdmin):
+	list_display = ('name', 'amount', 'frequency', 'deadline')
+	search_fields = ('name',)
+	list_filter = ('frequency',)
+	ordering = ('name',)
+
+
+@admin.register(ScholarshipAward)
+class ScholarshipAwardAdmin(admin.ModelAdmin):
+	list_display = ('scholarship_name', 'applicant', 'award_date', 'award_amount', 'status')
+	search_fields = ('scholarship_name', 'applicant__name', 'applicant__student_id')
+	list_filter = ('status',)
+	ordering = ('-award_date',)
+
+
+@admin.register(AwardDecision)
+class AwardDecisionAdmin(admin.ModelAdmin):
+	list_display = ('applicant', 'scholarship_name', 'decision', 'decided_at')
+	search_fields = ('applicant__name', 'applicant__student_id', 'scholarship_name')
+	list_filter = ('decision', 'decided_at')
+	ordering = ('-decided_at',)
+
+
+    

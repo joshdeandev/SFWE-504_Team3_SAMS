@@ -1,5 +1,6 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.http import HttpResponse
+from django.contrib.auth.decorators import login_required
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import os
@@ -12,7 +13,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 import csv
 import tempfile
-from .models import Applicant, ScholarshipAward, Scholarship, ReviewerInformationRequest
+from .models import Applicant, ScholarshipAward, Scholarship, ReviewerInformationRequest, AwardDecision
 from django.utils import timezone
 
 
@@ -23,6 +24,7 @@ class ReportEngine:
         self.scholarships = []
 
     # Function to log reviewer requests for additional applicant information
+    # Implements requirement SFWE504_3-LLR-27.
     def log_information_request(self, applicant_id: str = None, applicant: Applicant = None,
                                 reviewer_name: str = None, reviewer_email: str = None,
                                 scholarship_name: str = None, request_type: str = None,
@@ -909,6 +911,18 @@ END OF LOG
                 if hasattr(applicant, 'committee_feedback'):
                     review_data['committee_feedback'] = applicant.committee_feedback
 
+                # Fetch simple award decision, if any
+                award_decision_data = None
+                try:
+                    ad = AwardDecision.objects.get(applicant=applicant, scholarship_name=scholarship.name)
+                    award_decision_data = {
+                        'decision': ad.decision,
+                        'comments': ad.comments,
+                        'decided_at': ad.decided_at
+                    }
+                except AwardDecision.DoesNotExist:
+                    pass
+
                 # Prepare detailed applicant assessment
                 applicant_assessment = {
                     'applicant': {
@@ -931,7 +945,8 @@ END OF LOG
                             if not completed
                         ]
                     },
-                    'review_data': review_data
+                    'review_data': review_data,
+                    'award_decision': award_decision_data
                 }
                 
                 if meets_all_criteria:
@@ -991,11 +1006,22 @@ END OF LOG
             'incomplete': 0
         }
         
+        # Award decision summary counts
+        award_decision_summary = {
+            'awarded': 0,
+            'not_awarded': 0,
+            'pending': 0
+        }
+        
         for scholarship in report['matches']:
             for match in scholarship['matches']:
                 # Track application status
                 status = match['application_status']['status']
                 application_completion[status] += 1
+                
+                # Award decision counting
+                if match.get('award_decision'):
+                    award_decision_summary[match['award_decision']['decision']] += 1
                 
                 # Track review completion
                 review_data = match['review_data']
@@ -1047,7 +1073,8 @@ END OF LOG
                 'reviews_completed': completed_reviews,
                 'total_reviews_expected': total_reviews
             },
-            'application_completion': application_completion
+            'application_completion': application_completion,
+            'award_decisions': award_decision_summary
         }
         
         return report
@@ -1099,6 +1126,15 @@ END OF LOG
         story.append(Paragraph(f"Reviews Completed: {review_stats['reviews_completed']} of {review_stats['total_reviews_expected']}", styles['Normal']))
         story.append(Paragraph("<br/>", styles['Normal']))
 
+        # Award Decision Summary Section
+        if 'award_decisions' in report_data['summary']:
+            story.append(Paragraph("Award Decisions", styles['Heading2']))
+            ad = report_data['summary']['award_decisions']
+            story.append(Paragraph(f"Awarded: {ad['awarded']}", styles['Normal']))
+            story.append(Paragraph(f"Not Awarded: {ad['not_awarded']}", styles['Normal']))
+            story.append(Paragraph(f"Pending: {ad['pending']}", styles['Normal']))
+            story.append(Paragraph("<br/>", styles['Normal']))
+
         # Matches by Scholarship
         for scholarship_match in report_data['matches']:
             story.append(Paragraph(scholarship_match['scholarship_name'], styles['Heading2']))
@@ -1115,7 +1151,7 @@ END OF LOG
             
             # Table of matching applicants with review scores
             story.append(Paragraph("Qualified Applicants:", styles['Heading3']))
-            applicant_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Application Status', 'Review Score']]
+            applicant_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Application Status', 'Review Score', 'Award Decision']]
             
             for match in scholarship_match['matches']:
                 applicant = match['applicant']
@@ -1130,6 +1166,9 @@ END OF LOG
                     review_scores.extend(review_data['essay_review']['scores'])
                 avg_review_score = sum(review_scores) / len(review_scores) if review_scores else 'N/A'
                 
+                decision_label = 'Pending'
+                if match.get('award_decision'):
+                    decision_label = match['award_decision']['decision'].replace('_', ' ').title()
                 applicant_data.append([
                     applicant['name'],
                     applicant['student_id'],
@@ -1137,7 +1176,8 @@ END OF LOG
                     f"{applicant['gpa']:.2f}",
                     applicant['academic_level'],
                     application_status.get('status', 'Unknown').title(),
-                    f"{avg_review_score:.1f}" if isinstance(avg_review_score, float) else avg_review_score
+                    f"{avg_review_score:.1f}" if isinstance(avg_review_score, float) else avg_review_score,
+                    decision_label
                 ])
             
             if len(applicant_data) > 1:
@@ -1171,7 +1211,7 @@ END OF LOG
                     story.append(Paragraph("Interview Notes:", styles['Heading4']))
                     story.append(Paragraph(review_data['interview_notes'], styles['Normal']))
                 
-                # Committee Feedback
+                # Committee Feedback (retained)
                 if review_data.get('committee_feedback'):
                     story.append(Paragraph("Committee Feedback:", styles['Heading4']))
                     for feedback in review_data['committee_feedback']:
@@ -1179,6 +1219,19 @@ END OF LOG
                             f"• {feedback['member']}: {feedback['comments']}", 
                             styles['Normal']
                         ))
+                # Award Decision Details
+                if match.get('award_decision'):
+                    ad = match['award_decision']
+                    story.append(Paragraph("Award Decision:", styles['Heading4']))
+                    story.append(Paragraph(f"Decision: {ad['decision'].replace('_', ' ').title()}", styles['Normal']))
+                    if ad.get('decided_at'):
+                        try:
+                            story.append(Paragraph(f"Decided At: {ad['decided_at'].strftime('%Y-%m-%d')}", styles['Normal']))
+                        except Exception:
+                            story.append(Paragraph(f"Decided At: {ad['decided_at']}", styles['Normal']))
+                    if ad.get('comments'):
+                        story.append(Paragraph("Comments:", styles['Heading4']))
+                        story.append(Paragraph(str(ad['comments']), styles['Normal']))
             
             story.append(Paragraph("<br/>", styles['Normal']))
 
@@ -1235,7 +1288,7 @@ END OF LOG
             writer.writerow(['Scholarship Name', 'Applicant Name', 'Student ID', 'Major', 'GPA', 
                            'Academic Level', 'Application Status', 'Qualification Score', 
                            'Requirements Met', 'Requirements Pending', 'Review Score', 'Has Interview', 
-                           'Has Committee Feedback'])
+                           'Has Committee Feedback', 'Award Decision', 'Decision Comments'])
             
             for match in report_data['matches']:
                 scholarship_name = match['scholarship_name']
@@ -1251,6 +1304,12 @@ END OF LOG
                         review_scores.extend(review_data['essay_review']['scores'])
                     avg_review_score = f"{sum(review_scores) / len(review_scores):.1f}" if review_scores else 'N/A'
                     
+                    decision_label = 'Pending'
+                    decision_comments = ''
+                    if applicant_match.get('award_decision'):
+                        decision_label = applicant_match['award_decision']['decision'].replace('_', ' ').title()
+                        decision_comments = applicant_match['award_decision'].get('comments', '')
+
                     writer.writerow([
                         scholarship_name,
                         applicant['name'],
@@ -1264,7 +1323,9 @@ END OF LOG
                         '; '.join(applicant_match.get('requirements_pending', [])),
                         avg_review_score,
                         'Yes' if review_data.get('interview_notes') else 'No',
-                        'Yes' if review_data.get('committee_feedback') else 'No'
+                        'Yes' if review_data.get('committee_feedback') else 'No',
+                        decision_label,
+                        decision_comments
                     ])
             writer.writerow([])
             
@@ -1380,7 +1441,7 @@ END OF LOG
             # Matching applicants with review scores
             ws_matches['A6'] = "Qualified Applicants"
             headers = ['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Application Status', 
-                      'Review Score', 'Essay Scores', 'Interview Complete', 'Committee Review']
+                      'Review Score', 'Essay Scores', 'Interview Complete', 'Committee Review', 'Award Decision', 'Decision Comments']
             for col, header in enumerate(headers, 1):
                 cell = ws_matches.cell(row=7, column=col, value=header)
                 cell.font = Font(bold=True)
@@ -1410,6 +1471,13 @@ END OF LOG
                 ws_matches.cell(row=row, column=8, value=', '.join(f"{score:.1f}" for score in review_data.get('essay_review', {}).get('scores', [])) or 'N/A')
                 ws_matches.cell(row=row, column=9, value='Yes' if review_data.get('interview_notes') else 'No')
                 ws_matches.cell(row=row, column=10, value='Yes' if review_data.get('committee_feedback') else 'No')
+                decision_label = 'Pending'
+                decision_comments = ''
+                if match.get('award_decision'):
+                    decision_label = match['award_decision']['decision'].replace('_', ' ').title()
+                    decision_comments = match['award_decision'].get('comments', '')
+                ws_matches.cell(row=row, column=11, value=decision_label)
+                ws_matches.cell(row=row, column=12, value=decision_comments)
                 row += 1
                 
                 # Add detailed review information
@@ -1513,10 +1581,10 @@ END OF LOG
 
     # Function to generate applicant report. Meets requirement SFWE504_3-LLR-6.
     def generate_applicant_report(self, student_id: str = None, netid: str = None) -> Dict[str, Any]:
-        """Generate a comprehensive report of an applicant's data and scholarship status.
+        """Generate a comprehensive report of applicant(s) data and scholarship status.
         
         Args:
-            student_id (str, optional): Student ID to search for
+            student_id (str, optional): Student ID to search for. If None and netid is None, returns all applicants.
             netid (str, optional): NetID to search for (alternative to student_id)
             
         Returns:
@@ -1526,77 +1594,146 @@ END OF LOG
                 - Academic achievements
                 - Financial information
                 - Essay submissions and evaluations
+                - If no student_id/netid provided: returns report for all applicants
         """
-        # Find the applicant first
-        applicant_data = None
-        if student_id:
-            try:
-                applicant_data = Applicant.objects.get(student_id=student_id)
-            except Applicant.DoesNotExist:
-                pass
-        elif netid:
-            try:
-                applicant_data = Applicant.objects.get(netid=netid)
-            except Applicant.DoesNotExist:
-                pass
+        # Determine if we're generating a report for one applicant or all
+        if student_id or netid:
+            # Single applicant report
+            applicant_data = None
+            if student_id:
+                try:
+                    applicant_data = Applicant.objects.get(student_id=student_id)
+                except Applicant.DoesNotExist:
+                    pass
+            elif netid:
+                try:
+                    applicant_data = Applicant.objects.get(netid=netid)
+                except Applicant.DoesNotExist:
+                    pass
+            
+            if not applicant_data:
+                return None
+            
+            applicants_to_process = [applicant_data]
+        else:
+            # All applicants report
+            applicants_to_process = list(Applicant.objects.all().order_by('name'))
         
-        if not applicant_data:
-            return None
-        
-        # Query all awards for this applicant directly from ScholarshipAward model
-        awards_queryset = ScholarshipAward.objects.filter(applicant=applicant_data)
-        
-        applicant_awards = []
-        for award in awards_queryset:
-            applicant_awards.append({
-                'scholarship_name': award.scholarship_name,
-                'award_amount': float(award.award_amount),
-                'award_date': award.award_date,
-                'status': award.status,
-                'disbursements': [
-                    {'date': date, 'amount': float(award.award_amount) / len(award.disbursement_dates) if award.disbursement_dates else float(award.award_amount)}
-                    for date in award.disbursement_dates
-                ],
-                'requirements_met': award.requirements_met,
-                'requirements_pending': award.requirements_pending,
-                'performance_metrics': award.performance_metrics,
-                'essays_evaluation': award.essays_evaluation,
-                'interview_notes': award.interview_notes,
-                'committee_feedback': award.committee_feedback
-            })
+        # Process each applicant
+        all_applicant_reports = []
+        for applicant_data in applicants_to_process:
+            # Query only ACTIVE awards for this applicant (exclude previous/completed awards)
+            awards_queryset = ScholarshipAward.objects.filter(applicant=applicant_data, status='active')
 
-        # Compile comprehensive applicant report and parse any ISO date strings
-        report = {
-            'personal_info': {
-                'name': applicant_data.name,
-                'student_id': applicant_data.student_id,
-                'netid': applicant_data.netid,
-            },
-            'academic_info': {
-                'major': applicant_data.major,
-                'minor': applicant_data.minor,
-                'gpa': applicant_data.gpa,
-                'academic_level': applicant_data.academic_level,
-                'expected_graduation': applicant_data.expected_graduation,  # This is already a date from model
-                'academic_history': self._parse_iso_dates(applicant_data.academic_history),
-            },
-            'achievements': self._parse_iso_dates(applicant_data.academic_achievements),
-            'financial_info': applicant_data.financial_info,
-            'essays': [{
-                'prompt': essay.get('prompt', '') if isinstance(essay, dict) else '',
-                'submission_date': self._parse_iso_dates(essay.get('submission_date')) if isinstance(essay, dict) else None,
-                'content': essay.get('content', '') if isinstance(essay, dict) else str(essay)
-            } for essay in (applicant_data.essays if applicant_data.essays else [])],
-            'scholarships': {
-                'total_awards': len(applicant_awards),
-                'total_amount': sum(award['award_amount'] for award in applicant_awards),
-                'active_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'active']),
-                'completed_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'completed']),
-                'detailed_awards': self._parse_iso_dates(applicant_awards)
+            # Deduplicate by scholarship_name: keep the most recent award per scholarship
+            awards_by_name = {}
+            for aw in awards_queryset.order_by('scholarship_name', '-award_date', '-id'):
+                if aw.scholarship_name not in awards_by_name:
+                    awards_by_name[aw.scholarship_name] = aw
+            deduped_awards = list(awards_by_name.values())
+            
+            applicant_awards = []
+            for award in deduped_awards:
+                applicant_awards.append({
+                    'scholarship_name': award.scholarship_name,
+                    'award_amount': float(award.award_amount),
+                    'award_date': award.award_date,
+                    'status': award.status,
+                    'disbursements': [
+                        {'date': date, 'amount': float(award.award_amount) / len(award.disbursement_dates) if award.disbursement_dates else float(award.award_amount)}
+                        for date in award.disbursement_dates
+                    ],
+                    'requirements_met': award.requirements_met,
+                    'requirements_pending': award.requirements_pending,
+                    'performance_metrics': award.performance_metrics,
+                    'essays_evaluation': award.essays_evaluation,
+                    'interview_notes': award.interview_notes,
+                    'committee_feedback': award.committee_feedback
+                })
+
+            # Compile comprehensive applicant report and parse any ISO date strings
+            # Build normalized essay evaluation list combining applicant essay evaluations and award-linked evaluations
+            normalized_essay_evaluations: List[Dict[str, Any]] = []
+
+            # Applicant-level essay evaluations (embedded in applicant_data.essays as 'evaluation')
+            if getattr(applicant_data, 'essays', None):
+                for essay in applicant_data.essays:
+                    if isinstance(essay, dict):
+                        eval_block = essay.get('evaluation')
+                        if isinstance(eval_block, dict):
+                            normalized_essay_evaluations.append({
+                                'prompt': essay.get('prompt', ''),
+                                'score': eval_block.get('score'),
+                                'feedback': eval_block.get('feedback'),
+                                'reviewer': eval_block.get('reviewer'),
+                                'date': self._parse_iso_dates(eval_block.get('date')),
+                                'source': 'Applicant Essay',
+                                'scholarship_name': None
+                            })
+
+            # Award-level essay evaluations (award['essays_evaluation'] list)
+            for award in applicant_awards:
+                evaluations = award.get('essays_evaluation')
+                if isinstance(evaluations, list):
+                    for ev in evaluations:
+                        if isinstance(ev, dict):
+                            normalized_essay_evaluations.append({
+                                'prompt': ev.get('prompt', ''),
+                                'score': ev.get('score'),
+                                'feedback': ev.get('feedback'),
+                                'reviewer': ev.get('reviewer'),
+                                'date': self._parse_iso_dates(ev.get('date')),
+                                'source': 'Scholarship Award',
+                                'scholarship_name': award.get('scholarship_name')
+                            })
+
+            applicant_report = {
+                'personal_info': {
+                    'name': applicant_data.name,
+                    'student_id': applicant_data.student_id,
+                    'netid': applicant_data.netid,
+                },
+                'academic_info': {
+                    'major': applicant_data.major,
+                    'minor': applicant_data.minor,
+                    'gpa': applicant_data.gpa,
+                    'academic_level': applicant_data.academic_level,
+                    'expected_graduation': applicant_data.expected_graduation,  # This is already a date from model
+                    'academic_history': self._parse_iso_dates(applicant_data.academic_history),
+                },
+                'achievements': self._parse_iso_dates(applicant_data.academic_achievements),
+                'financial_info': applicant_data.financial_info,
+                'essays': [{
+                    'prompt': essay.get('prompt', '') if isinstance(essay, dict) else '',
+                    'submission_date': self._parse_iso_dates(essay.get('submission_date')) if isinstance(essay, dict) else None,
+                    'content': essay.get('content', '') if isinstance(essay, dict) else str(essay)
+                } for essay in (applicant_data.essays if applicant_data.essays else [])],
+                'essay_evaluations': self._parse_iso_dates(normalized_essay_evaluations),
+                'scholarships': {
+                    'total_awards': len(applicant_awards),
+                    'total_amount': sum(award['award_amount'] for award in applicant_awards),
+                    'active_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'active']),
+                    'completed_awards': self._parse_iso_dates([award for award in applicant_awards if award['status'] == 'completed']),
+                    'detailed_awards': self._parse_iso_dates(applicant_awards)
+                }
             }
-        }
-
-        return report
+            all_applicant_reports.append(applicant_report)
+        
+        # Return single report or multi-applicant report based on input
+        if student_id or netid:
+            # Single applicant - return the report directly
+            return all_applicant_reports[0] if all_applicant_reports else None
+        else:
+            # Multiple applicants - return a summary report
+            return {
+                'total_applicants': len(all_applicant_reports),
+                'applicants': all_applicant_reports,
+                'summary': {
+                    'total_scholarship_awards': sum(app['scholarships']['total_awards'] for app in all_applicant_reports),
+                    'total_scholarship_amount': sum(app['scholarships']['total_amount'] for app in all_applicant_reports),
+                    'average_gpa': sum(app['academic_info']['gpa'] for app in all_applicant_reports) / len(all_applicant_reports) if all_applicant_reports else 0
+                }
+            }
 
     # Function to generate scholarship report. Meets requirements SFWE504_3-LLR-3.
     def generate_scholarship_report(self, filters=None, export_format=None, output_path=None):
@@ -1842,112 +1979,180 @@ END OF LOG
         story = []
         styles = getSampleStyleSheet()
 
-        # Title
-        story.append(Paragraph(f"Applicant Report: {report_data['personal_info']['name']}", styles['Heading1']))
-        story.append(Paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
-        story.append(Paragraph("<br/>", styles['Normal']))
-
-        # Personal and Academic Information
-        story.append(Paragraph("Personal Information", styles['Heading2']))
-        personal_info = [
-            ['Student ID:', report_data['personal_info']['student_id']],
-            ['NetID:', report_data['personal_info']['netid']],
-            ['Major:', report_data['academic_info']['major']],
-            ['Minor:', report_data['academic_info']['minor'] or 'N/A'],
-            ['GPA:', f"{report_data['academic_info']['gpa']:.2f}"],
-            ['Academic Level:', report_data['academic_info']['academic_level']],
-            ['Expected Graduation:', report_data['academic_info']['expected_graduation'].strftime('%Y-%m-%d')]
-        ]
-        info_table = Table(personal_info)
-        info_table.setStyle(TableStyle([
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('BACKGROUND', (0, 0), (0, -1), colors.grey),
-            ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke)
-        ]))
-        story.append(info_table)
-        story.append(Paragraph("<br/>", styles['Normal']))
-
-        # Academic Achievements
-        story.append(Paragraph("Academic Achievements", styles['Heading2']))
-        if report_data.get('achievements'):
-            for achievement in report_data['achievements']:
-                if isinstance(achievement, dict):
-                    achievement_type = achievement.get('type', 'Achievement')
-                    achievement_date = achievement.get('date')
-                    date_str = achievement_date.strftime('%Y-%m-%d') if hasattr(achievement_date, 'strftime') else str(achievement_date) if achievement_date else 'N/A'
-                    story.append(Paragraph(
-                        f"• {achievement_type} - {date_str}",
-                        styles['Normal']
-                    ))
-                    if achievement.get('description'):
-                        story.append(Paragraph(f"  {achievement['description']}", styles['Normal']))
-                else:
-                    story.append(Paragraph(f"• {str(achievement)}", styles['Normal']))
-        else:
-            story.append(Paragraph("No achievements recorded", styles['Normal']))
-        story.append(Paragraph("<br/>", styles['Normal']))
-
-        # Financial Information
-        story.append(Paragraph("Financial Information", styles['Heading2']))
-        financial_info = report_data.get('financial_info', {})
-        if isinstance(financial_info, dict):
-            story.append(Paragraph(f"FAFSA Submitted: {financial_info.get('fafsa_submitted', 'N/A')}", styles['Normal']))
-            story.append(Paragraph(f"Expected Family Contribution: ${financial_info.get('efc', 0):,}", styles['Normal']))
-            story.append(Paragraph(f"Household Income Range: {financial_info.get('household_income', 'N/A')}", styles['Normal']))
-        else:
-            story.append(Paragraph("Financial information not available", styles['Normal']))
-        story.append(Paragraph("<br/>", styles['Normal']))
-
-        # Current Aid
-        if isinstance(financial_info, dict) and financial_info.get('current_aid'):
-            story.append(Paragraph("Current Financial Aid:", styles['Heading3']))
-            for aid in financial_info['current_aid']:
-                if isinstance(aid, dict):
-                    story.append(Paragraph(f"• {aid.get('type', 'Aid')}: ${aid.get('amount', 0):,}", styles['Normal']))
-                else:
-                    story.append(Paragraph(f"• {str(aid)}", styles['Normal']))
-        story.append(Paragraph("<br/>", styles['Normal']))
-
-        # Scholarship Awards
-        story.append(Paragraph("Scholarship Awards", styles['Heading2']))
-        story.append(Paragraph(
-            f"Total Awards: {report_data['scholarships']['total_awards']} "
-            f"(${report_data['scholarships']['total_amount']:,})",
-            styles['Normal']
-        ))
-
-        for award in report_data['scholarships']['detailed_awards']:
-            story.append(Paragraph(f"Award: {award.get('scholarship_name', 'Unknown')}", styles['Heading3']))
-            story.append(Paragraph(f"Amount: ${award.get('award_amount', 0):,}", styles['Normal']))
-            story.append(Paragraph(f"Status: {award.get('status', 'N/A')}", styles['Normal']))
-            award_date = award.get('award_date')
-            if hasattr(award_date, 'strftime'):
-                story.append(Paragraph(f"Award Date: {award_date.strftime('%Y-%m-%d')}", styles['Normal']))
-            elif award_date:
-                story.append(Paragraph(f"Award Date: {str(award_date)}", styles['Normal']))
-            
-            if award.get('essays_evaluation'):
-                story.append(Paragraph("Essay Evaluations:", styles['Heading4']))
-                for eval in award['essays_evaluation']:
-                    if isinstance(eval, dict):
-                        story.append(Paragraph(
-                            f"• {eval.get('prompt', 'Essay')}: Score {eval.get('score', 'N/A')}/10 - {eval.get('feedback', 'No feedback')}",
-                            styles['Normal']
-                        ))
-                    else:
-                        story.append(Paragraph(f"• {str(eval)}", styles['Normal']))
-
-            if award.get('committee_feedback'):
-                story.append(Paragraph("Committee Feedback:", styles['Heading4']))
-                for feedback in award['committee_feedback']:
-                    if isinstance(feedback, dict):
-                        story.append(Paragraph(
-                            f"• {feedback.get('member', 'Member')}: {feedback.get('comments', 'No comments')}",
-                            styles['Normal']
-                        ))
-                    else:
-                        story.append(Paragraph(f"• {str(feedback)}", styles['Normal']))
+        # Check if this is a multi-applicant report or single applicant
+        is_multi_applicant = 'applicants' in report_data
+        
+        if is_multi_applicant:
+            # Multi-applicant summary report
+            story.append(Paragraph(f"All Applicants Report", styles['Heading1']))
+            story.append(Paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
             story.append(Paragraph("<br/>", styles['Normal']))
+            
+            # Summary statistics
+            story.append(Paragraph("Summary Statistics", styles['Heading2']))
+            summary_data = [
+                ['Total Applicants:', str(report_data['total_applicants'])],
+                ['Total Scholarship Awards:', str(report_data['summary']['total_scholarship_awards'])],
+                ['Total Scholarship Amount:', f"${report_data['summary']['total_scholarship_amount']:,.2f}"],
+                ['Average GPA:', f"{report_data['summary']['average_gpa']:.2f}"]
+            ]
+            summary_table = Table(summary_data)
+            summary_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('BACKGROUND', (0, 0), (0, -1), colors.grey),
+                ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke)
+            ]))
+            story.append(summary_table)
+            story.append(Paragraph("<br/>", styles['Normal']))
+            
+            # Individual applicant summaries
+            story.append(Paragraph("Individual Applicants", styles['Heading2']))
+            applicant_summary_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Awards', 'Total Amount']]
+            for applicant in report_data['applicants']:
+                applicant_summary_data.append([
+                    applicant['personal_info']['name'],
+                    applicant['personal_info']['student_id'],
+                    applicant['academic_info']['major'],
+                    f"{applicant['academic_info']['gpa']:.2f}",
+                    applicant['academic_info']['academic_level'],
+                    str(applicant['scholarships']['total_awards']),
+                    f"${applicant['scholarships']['total_amount']:,.2f}"
+                ])
+            
+            applicant_table = Table(applicant_summary_data)
+            applicant_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTSIZE', (0, 0), (-1, -1), 8)
+            ]))
+            story.append(applicant_table)
+            
+        else:
+            # Single applicant detailed report (existing logic)
+            story.append(Paragraph(f"Applicant Report: {report_data['personal_info']['name']}", styles['Heading1']))
+            story.append(Paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Personal and Academic Information
+            story.append(Paragraph("Personal Information", styles['Heading2']))
+            personal_info = [
+                ['Student ID:', report_data['personal_info']['student_id']],
+                ['NetID:', report_data['personal_info']['netid']],
+                ['Major:', report_data['academic_info']['major']],
+                ['Minor:', report_data['academic_info']['minor'] or 'N/A'],
+                ['GPA:', f"{report_data['academic_info']['gpa']:.2f}"],
+                ['Academic Level:', report_data['academic_info']['academic_level']],
+                ['Expected Graduation:', report_data['academic_info']['expected_graduation'].strftime('%Y-%m-%d')]
+            ]
+            info_table = Table(personal_info)
+            info_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('BACKGROUND', (0, 0), (0, -1), colors.grey),
+                ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke)
+            ]))
+            story.append(info_table)
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Academic Achievements
+            story.append(Paragraph("Academic Achievements", styles['Heading2']))
+            if report_data.get('achievements'):
+                for achievement in report_data['achievements']:
+                    if isinstance(achievement, dict):
+                        achievement_type = achievement.get('type', 'Achievement')
+                        achievement_date = achievement.get('date')
+                        date_str = achievement_date.strftime('%Y-%m-%d') if hasattr(achievement_date, 'strftime') else str(achievement_date) if achievement_date else 'N/A'
+                        story.append(Paragraph(
+                            f"• {achievement_type} - {date_str}",
+                            styles['Normal']
+                        ))
+                        if achievement.get('description'):
+                            story.append(Paragraph(f"  {achievement['description']}", styles['Normal']))
+                    else:
+                        story.append(Paragraph(f"• {str(achievement)}", styles['Normal']))
+            else:
+                story.append(Paragraph("No achievements recorded", styles['Normal']))
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Financial Information
+            story.append(Paragraph("Financial Information", styles['Heading2']))
+            financial_info = report_data.get('financial_info', {})
+            if isinstance(financial_info, dict):
+                story.append(Paragraph(f"FAFSA Submitted: {financial_info.get('fafsa_submitted', 'N/A')}", styles['Normal']))
+                story.append(Paragraph(f"Expected Family Contribution: ${financial_info.get('efc', 0):,}", styles['Normal']))
+                story.append(Paragraph(f"Household Income Range: {financial_info.get('household_income', 'N/A')}", styles['Normal']))
+            else:
+                story.append(Paragraph("Financial information not available", styles['Normal']))
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Current Aid
+            if isinstance(financial_info, dict) and financial_info.get('current_aid'):
+                story.append(Paragraph("Current Financial Aid:", styles['Heading3']))
+                for aid in financial_info['current_aid']:
+                    if isinstance(aid, dict):
+                        story.append(Paragraph(f"• {aid.get('type', 'Aid')}: ${aid.get('amount', 0):,}", styles['Normal']))
+                    else:
+                        story.append(Paragraph(f"• {str(aid)}", styles['Normal']))
+            story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Scholarship Awards
+            story.append(Paragraph("Scholarship Awards", styles['Heading2']))
+            story.append(Paragraph(
+                f"Total Awards: {report_data['scholarships']['total_awards']} "
+                f"(${report_data['scholarships']['total_amount']:,})",
+                styles['Normal']
+            ))
+
+            for award in report_data['scholarships']['detailed_awards']:
+                story.append(Paragraph(f"Award: {award.get('scholarship_name', 'Unknown')}", styles['Heading3']))
+                story.append(Paragraph(f"Amount: ${award.get('award_amount', 0):,}", styles['Normal']))
+                story.append(Paragraph(f"Status: {award.get('status', 'N/A')}", styles['Normal']))
+                award_date = award.get('award_date')
+                if hasattr(award_date, 'strftime'):
+                    story.append(Paragraph(f"Award Date: {award_date.strftime('%Y-%m-%d')}", styles['Normal']))
+                elif award_date:
+                    story.append(Paragraph(f"Award Date: {str(award_date)}", styles['Normal']))
+                # (Per-award raw evaluations removed; consolidated table provided below)
+
+                if award.get('committee_feedback'):
+                    story.append(Paragraph("Committee Feedback:", styles['Heading4']))
+                    for feedback in award['committee_feedback']:
+                        if isinstance(feedback, dict):
+                            story.append(Paragraph(
+                                f"• {feedback.get('member', 'Member')}: {feedback.get('comments', 'No comments')}",
+                                styles['Normal']
+                            ))
+                        else:
+                            story.append(Paragraph(f"• {str(feedback)}", styles['Normal']))
+                story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Consolidated Essay Evaluation Section
+            evaluations = report_data.get('essay_evaluations', [])
+            story.append(Paragraph("Consolidated Essay Evaluations", styles['Heading2']))
+            if evaluations:
+                eval_table_data = [["Source", "Scholarship", "Prompt", "Score", "Reviewer", "Date", "Feedback"]]
+                for ev in evaluations:
+                    date_obj = ev.get('date')
+                    date_str = date_obj.strftime('%Y-%m-%d') if hasattr(date_obj, 'strftime') else (str(date_obj) if date_obj else '')
+                    eval_table_data.append([
+                        ev.get('source', ''),
+                        ev.get('scholarship_name') or '-',
+                        ev.get('prompt', '')[:50],
+                        ev.get('score'),
+                        ev.get('reviewer'),
+                        date_str,
+                        (ev.get('feedback') or '')[:80]
+                    ])
+                eval_table = Table(eval_table_data, repeatRows=1)
+                eval_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.grey),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ]))
+                story.append(eval_table)
+            else:
+                story.append(Paragraph("No essay evaluations available", styles['Normal']))
 
         doc.build(story)
         return output_path
@@ -1960,70 +2165,199 @@ END OF LOG
 
         wb = Workbook()
         
-        # Personal Information Sheet
-        ws_personal = wb.active
-        ws_personal.title = "Personal Information"
+        # Check if this is a multi-applicant report
+        is_multi_applicant = 'applicants' in report_data
         
-        personal_info = [
-            ['Student Name', report_data['personal_info']['name']],
-            ['Student ID', report_data['personal_info']['student_id']],
-            ['NetID', report_data['personal_info']['netid']],
-            ['Major', report_data['academic_info']['major']],
-            ['Minor', report_data['academic_info']['minor'] or 'N/A'],
-            ['GPA', f"{report_data['academic_info']['gpa']:.2f}"],
-            ['Academic Level', report_data['academic_info']['academic_level']],
-            ['Expected Graduation', report_data['academic_info']['expected_graduation'].strftime('%Y-%m-%d')]
-        ]
+        if is_multi_applicant:
+            # Multi-applicant summary
+            ws_summary = wb.active
+            ws_summary.title = "Summary"
+            
+            # Summary statistics
+            ws_summary.cell(row=1, column=1, value="All Applicants Summary").font = Font(bold=True, size=14)
+            ws_summary.cell(row=3, column=1, value="Total Applicants").font = Font(bold=True)
+            ws_summary.cell(row=3, column=2, value=report_data['total_applicants'])
+            ws_summary.cell(row=4, column=1, value="Total Scholarship Awards").font = Font(bold=True)
+            ws_summary.cell(row=4, column=2, value=report_data['summary']['total_scholarship_awards'])
+            ws_summary.cell(row=5, column=1, value="Total Scholarship Amount").font = Font(bold=True)
+            ws_summary.cell(row=5, column=2, value=f"${report_data['summary']['total_scholarship_amount']:,.2f}")
+            ws_summary.cell(row=6, column=1, value="Average GPA").font = Font(bold=True)
+            ws_summary.cell(row=6, column=2, value=f"{report_data['summary']['average_gpa']:.2f}")
+            
+            # Individual applicant list
+            ws_applicants = wb.create_sheet("All Applicants")
+            headers = ['Name', 'Student ID', 'NetID', 'Major', 'Minor', 'GPA', 'Academic Level', 'Total Awards', 'Total Amount']
+            for col, header in enumerate(headers, 1):
+                cell = ws_applicants.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+            
+            for row_idx, applicant in enumerate(report_data['applicants'], 2):
+                ws_applicants.cell(row=row_idx, column=1, value=applicant['personal_info']['name'])
+                ws_applicants.cell(row=row_idx, column=2, value=applicant['personal_info']['student_id'])
+                ws_applicants.cell(row=row_idx, column=3, value=applicant['personal_info']['netid'])
+                ws_applicants.cell(row=row_idx, column=4, value=applicant['academic_info']['major'])
+                ws_applicants.cell(row=row_idx, column=5, value=applicant['academic_info']['minor'] or 'N/A')
+                ws_applicants.cell(row=row_idx, column=6, value=f"{applicant['academic_info']['gpa']:.2f}")
+                ws_applicants.cell(row=row_idx, column=7, value=applicant['academic_info']['academic_level'])
+                ws_applicants.cell(row=row_idx, column=8, value=applicant['scholarships']['total_awards'])
+                ws_applicants.cell(row=row_idx, column=9, value=f"${applicant['scholarships']['total_amount']:,.2f}")
         
-        for row_idx, row in enumerate(personal_info, 1):
-            for col_idx, value in enumerate(row, 1):
-                cell = ws_personal.cell(row=row_idx, column=col_idx, value=value)
-                if col_idx == 1:
-                    cell.font = Font(bold=True)
-        
-        # Academic History Sheet
-        ws_academic = wb.create_sheet("Academic History")
-        headers = ['Term', 'Course Code', 'Course Name', 'Grade']
-        for col, header in enumerate(headers, 1):
-            cell = ws_academic.cell(row=1, column=col, value=header)
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-        
-        row = 2
-        for term in report_data['academic_info']['academic_history']:
-            for course in term['courses']:
-                ws_academic.cell(row=row, column=1, value=term['term'])
-                ws_academic.cell(row=row, column=2, value=course['code'])
-                ws_academic.cell(row=row, column=3, value=course['name'])
-                ws_academic.cell(row=row, column=4, value=course['grade'])
-                row += 1
-        
-        # Scholarships Sheet
-        ws_scholarships = wb.create_sheet("Scholarships")
-        scholarship_headers = ['Scholarship Name', 'Amount', 'Status', 'Award Date']
-        for col, header in enumerate(scholarship_headers, 1):
-            cell = ws_scholarships.cell(row=1, column=col, value=header)
-            cell.font = Font(bold=True)
-            cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
-        
-        for row, award in enumerate(report_data['scholarships']['detailed_awards'], 2):
-            ws_scholarships.cell(row=row, column=1, value=award['scholarship_name'])
-            ws_scholarships.cell(row=row, column=2, value=f"${award['award_amount']:,}")
-            ws_scholarships.cell(row=row, column=3, value=award['status'])
-            ws_scholarships.cell(row=row, column=4, value=award['award_date'].strftime('%Y-%m-%d'))
+        else:
+            # Single applicant detailed report (existing logic)
+            # Personal Information Sheet
+            ws_personal = wb.active
+            ws_personal.title = "Personal Information"
+            
+            personal_info = [
+                ['Student Name', report_data['personal_info']['name']],
+                ['Student ID', report_data['personal_info']['student_id']],
+                ['NetID', report_data['personal_info']['netid']],
+                ['Major', report_data['academic_info']['major']],
+                ['Minor', report_data['academic_info']['minor'] or 'N/A'],
+                ['GPA', f"{report_data['academic_info']['gpa']:.2f}"],
+                ['Academic Level', report_data['academic_info']['academic_level']],
+                ['Expected Graduation', report_data['academic_info']['expected_graduation'].strftime('%Y-%m-%d')]
+            ]
+            
+            for row_idx, row in enumerate(personal_info, 1):
+                for col_idx, value in enumerate(row, 1):
+                    cell = ws_personal.cell(row=row_idx, column=col_idx, value=value)
+                    if col_idx == 1:
+                        cell.font = Font(bold=True)
+            
+            # Academic History Sheet
+            ws_academic = wb.create_sheet("Academic History")
+            headers = ['Term', 'Course Code', 'Course Name', 'Grade']
+            for col, header in enumerate(headers, 1):
+                cell = ws_academic.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+            
+            row = 2
+            for term in report_data['academic_info']['academic_history']:
+                for course in term['courses']:
+                    ws_academic.cell(row=row, column=1, value=term['term'])
+                    ws_academic.cell(row=row, column=2, value=course['code'])
+                    ws_academic.cell(row=row, column=3, value=course['name'])
+                    ws_academic.cell(row=row, column=4, value=course['grade'])
+                    row += 1
+            
+            # Scholarships Sheet
+            ws_scholarships = wb.create_sheet("Scholarships")
+            scholarship_headers = ['Scholarship Name', 'Amount', 'Status', 'Award Date']
+            for col, header in enumerate(scholarship_headers, 1):
+                cell = ws_scholarships.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+            
+            for row, award in enumerate(report_data['scholarships']['detailed_awards'], 2):
+                ws_scholarships.cell(row=row, column=1, value=award['scholarship_name'])
+                ws_scholarships.cell(row=row, column=2, value=f"${award['award_amount']:,}")
+                ws_scholarships.cell(row=row, column=3, value=award['status'])
+                ws_scholarships.cell(row=row, column=4, value=award['award_date'].strftime('%Y-%m-%d'))
 
-        # Adjust column widths
-        for ws in [ws_personal, ws_academic, ws_scholarships]:
-            for col in ws.columns:
-                max_length = 0
-                for cell in col:
-                    try:
-                        max_length = max(max_length, len(str(cell.value)))
-                    except:
-                        pass
-                ws.column_dimensions[chr(64 + col[0].column)].width = min(max_length + 2, 50)
+            # Essay Evaluations Sheet
+            ws_evals = wb.create_sheet("Essay Evaluations")
+            eval_headers = ['Source', 'Scholarship', 'Prompt', 'Score', 'Reviewer', 'Date', 'Feedback']
+            for col, header in enumerate(eval_headers, 1):
+                cell = ws_evals.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+
+            for row_idx, ev in enumerate(report_data.get('essay_evaluations', []), start=2):
+                date_obj = ev.get('date')
+                date_str = date_obj.strftime('%Y-%m-%d') if hasattr(date_obj, 'strftime') else (str(date_obj) if date_obj else '')
+                ws_evals.cell(row=row_idx, column=1, value=ev.get('source'))
+                ws_evals.cell(row=row_idx, column=2, value=ev.get('scholarship_name') or '-')
+                ws_evals.cell(row=row_idx, column=3, value=ev.get('prompt'))
+                ws_evals.cell(row=row_idx, column=4, value=ev.get('score'))
+                ws_evals.cell(row=row_idx, column=5, value=ev.get('reviewer'))
+                ws_evals.cell(row=row_idx, column=6, value=date_str)
+                ws_evals.cell(row=row_idx, column=7, value=ev.get('feedback'))
+
+            # Adjust column widths
+            for ws in [ws_personal, ws_academic, ws_scholarships, ws_evals]:
+                for col in ws.columns:
+                    max_length = 0
+                    for cell in col:
+                        try:
+                            max_length = max(max_length, len(str(cell.value)))
+                        except:
+                            pass
+                    ws.column_dimensions[chr(64 + col[0].column)].width = min(max_length + 2, 50)
 
         wb.save(output_path)
+        return output_path
+
+    def export_applicant_report_to_csv(self, student_id: str = None, netid: str = None, output_path: str = None) -> str:
+        """Export applicant report to CSV with flattened essay evaluations."""
+        report_data = self.generate_applicant_report(student_id, netid)
+        if not report_data:
+            raise ValueError("Applicant not found")
+
+        import csv
+        
+        # Check if this is a multi-applicant report
+        is_multi_applicant = 'applicants' in report_data
+        
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            if is_multi_applicant:
+                # Multi-applicant summary CSV
+                writer.writerow([
+                    'Student Name','Student ID','NetID','Major','Minor','GPA','Academic Level',
+                    'Total Awards','Total Scholarship Amount'
+                ])
+                for applicant in report_data['applicants']:
+                    writer.writerow([
+                        applicant['personal_info']['name'],
+                        applicant['personal_info']['student_id'],
+                        applicant['personal_info']['netid'],
+                        applicant['academic_info']['major'],
+                        applicant['academic_info']['minor'] or 'N/A',
+                        f"{applicant['academic_info']['gpa']:.2f}",
+                        applicant['academic_info']['academic_level'],
+                        applicant['scholarships']['total_awards'],
+                        f"${applicant['scholarships']['total_amount']:,.2f}"
+                    ])
+            else:
+                # Single applicant with essay evaluations (existing logic)
+                writer.writerow([
+                    'Student Name','Student ID','NetID','Major','GPA','Academic Level',
+                    'Eval Source','Scholarship','Prompt','Score','Reviewer','Date','Feedback'
+                ])
+                evaluations = report_data.get('essay_evaluations', [])
+                if evaluations:
+                    for ev in evaluations:
+                        date_obj = ev.get('date')
+                        date_str = date_obj.strftime('%Y-%m-%d') if hasattr(date_obj, 'strftime') else (str(date_obj) if date_obj else '')
+                        writer.writerow([
+                            report_data['personal_info']['name'],
+                            report_data['personal_info']['student_id'],
+                            report_data['personal_info']['netid'],
+                            report_data['academic_info']['major'],
+                            f"{report_data['academic_info']['gpa']:.2f}",
+                            report_data['academic_info']['academic_level'],
+                            ev.get('source'),
+                            ev.get('scholarship_name') or '-',
+                            ev.get('prompt'),
+                            ev.get('score'),
+                            ev.get('reviewer'),
+                            date_str,
+                            ev.get('feedback')
+                        ])
+                else:
+                    writer.writerow([
+                        report_data['personal_info']['name'],
+                        report_data['personal_info']['student_id'],
+                        report_data['personal_info']['netid'],
+                        report_data['academic_info']['major'],
+                        f"{report_data['academic_info']['gpa']:.2f}",
+                        report_data['academic_info']['academic_level'],
+                        'None','-','-','-','-','-','No evaluations'
+                    ])
         return output_path
 
 
@@ -2156,31 +2490,29 @@ def home(request):
         }
     )
     
-    # Create the scholarship award
-    ScholarshipAward.objects.create(
-        scholarship_name=engineering_scholarship.name,
-        applicant=john_doe,  # Using the Applicant model instance
-        award_date=timezone.make_aware(datetime(2025, 8, 15)),
-        award_amount=5000.00,
-        disbursement_dates=[
+    # Create or update a single scholarship award (avoid duplicates on page reload)
+    _award_defaults = {
+        'award_date': timezone.make_aware(datetime(2025, 8, 15)),
+        'award_amount': 5000.00,
+        'disbursement_dates': [
             timezone.make_aware(datetime(2025, 9, 1)).isoformat(),
             timezone.make_aware(datetime(2026, 1, 1)).isoformat()
         ],
-        requirements_met=[
+        'requirements_met': [
             "Enrollment verification",
             "First semester GPA requirement"
         ],
-        requirements_pending=[
+        'requirements_pending': [
             "Second semester progress report",
             "Community service hours"
         ],
-        status="active",
-        performance_metrics={
+        'status': "active",
+        'performance_metrics': {
             'current_gpa': 3.8,
             'credits_completed': 15,
             'service_hours': 20
         },
-        essays_evaluation=[
+        'essays_evaluation': [
             {
                 'prompt': 'Career Goals',
                 'score': 9,
@@ -2192,12 +2524,40 @@ def home(request):
                 'feedback': 'Strong understanding of opportunity'
             }
         ],
-        interview_notes="Strong candidate with clear goals and excellent communication skills",
-        committee_feedback=[
+        'interview_notes': "Strong candidate with clear goals and excellent communication skills",
+        'committee_feedback': [
             {'member': 'Dr. Smith', 'comments': 'Highly recommended'},
             {'member': 'Prof. Johnson', 'comments': 'Outstanding potential'}
         ]
-    )
+    }
+    # Ensure a single sample active award exists (avoid mass duplicates)
+    # 1) Remove non-active duplicates for clarity
+    ScholarshipAward.objects.filter(
+        scholarship_name=engineering_scholarship.name,
+        applicant=john_doe
+    ).exclude(status='active').delete()
+
+    # 2) Deduplicate active awards and update or create without triggering MultipleObjectsReturned
+    existing_qs = ScholarshipAward.objects.filter(
+        scholarship_name=engineering_scholarship.name,
+        applicant=john_doe
+    ).order_by('-award_date', '-id')
+
+    latest = existing_qs.first()
+    if latest:
+        # delete any extras beyond the latest
+        if existing_qs.count() > 1:
+            existing_qs.exclude(pk=latest.pk).delete()
+        # update latest with defaults
+        for k, v in _award_defaults.items():
+            setattr(latest, k, v)
+        latest.save()
+    else:
+        ScholarshipAward.objects.create(
+            scholarship_name=engineering_scholarship.name,
+            applicant=john_doe,
+            **_award_defaults
+        )
 
     # Second scholarship
     cs_scholarship = Scholarship.objects.create(
@@ -2268,22 +2628,24 @@ def home(request):
                         raise ValueError(f"Unsupported export format for donor report: {export_format}")
                     filename = f'donor_report.{export_format}'
                 elif report_type == 'applicant':
-                    # Use sample student_id for demo purposes (in real app, this would come from form input)
-                    student_id = "12345678"
+                    # Generate report for ALL applicants (not just one sample)
                     if export_format == 'pdf':
                         output_path = engine.export_applicant_report_to_pdf(
-                            student_id=student_id,
+                            student_id=None,  # None = all applicants
                             output_path=temp_file.name
                         )
                         content_type = 'application/pdf'
                     elif export_format == 'xlsx':
                         output_path = engine.export_applicant_report_to_excel(
-                            student_id=student_id,
+                            student_id=None,  # None = all applicants
                             output_path=temp_file.name
                         )
                         content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
                     elif export_format == 'csv':
-                        output_path = engine.export_to_csv(temp_file.name)  # Using general CSV export for now
+                        output_path = engine.export_applicant_report_to_csv(
+                            student_id=None,  # None = all applicants
+                            output_path=temp_file.name
+                        )
                         content_type = 'text/csv'
                     else:
                         raise ValueError(f"Unsupported export format for applicant report: {export_format}")
@@ -2582,6 +2944,82 @@ def request_information(request):
     return redirect('reports_home')
 
 
+def award_scholarship(request):
+    """Endpoint to record a simple award decision and optionally create an award.
+
+    POST fields:
+      - applicant_id (student_id)
+      - scholarship_name
+      - decision: awarded | not_awarded | pending
+      - comments (optional)
+      - create_award (optional 'yes' to create ScholarshipAward when decision is awarded)
+      - award_amount (optional, defaults to Scholarship.amount if found)
+    """
+    if request.method != 'POST':
+        return HttpResponse("Method Not Allowed", status=405)
+
+    try:
+        student_id = request.POST.get('applicant_id')
+        scholarship_name = request.POST.get('scholarship_name')
+        decision = request.POST.get('decision', 'pending')
+        comments = request.POST.get('comments')
+        create_award_flag = request.POST.get('create_award') == 'yes'
+        award_amount_input = request.POST.get('award_amount')
+
+        if not student_id or not scholarship_name:
+            return HttpResponse("Missing applicant_id or scholarship_name", status=400)
+
+        try:
+            applicant = Applicant.objects.get(student_id=student_id)
+        except Applicant.DoesNotExist:
+            return HttpResponse(f"Applicant with student_id {student_id} not found", status=404)
+
+        # Record decision
+        AwardDecision.record(applicant=applicant, scholarship_name=scholarship_name, decision=decision, comments=comments)
+
+        # Optionally create ScholarshipAward if decision is awarded
+        if decision == 'awarded' and create_award_flag:
+            from decimal import Decimal
+            now = timezone.now()
+            # Try to find scholarship to default amount
+            scholarship_obj = Scholarship.objects.filter(name=scholarship_name).first()
+            default_amount = Decimal(str(scholarship_obj.amount)) if scholarship_obj else Decimal('0.00')
+            amount = Decimal(award_amount_input) if award_amount_input else default_amount
+
+            ScholarshipAward.objects.create(
+                scholarship_name=scholarship_name,
+                applicant=applicant,
+                award_date=now,
+                award_amount=amount,
+                disbursement_dates=[],
+                requirements_met=[],
+                requirements_pending=[],
+                status='active',
+                performance_metrics={},
+                notes=comments
+            )
+
+        # Provide user feedback via messages (if messages framework installed)
+        try:
+            from django.contrib import messages
+            verb_map = {
+                'awarded': 'awarded',
+                'not_awarded': 'marked as not awarded',
+                'pending': 'set to pending'
+            }
+            action_phrase = verb_map.get(decision, 'updated')
+            messages.success(request, f"Scholarship '{scholarship_name}' {action_phrase} for applicant {applicant.name}.")
+        except Exception:
+            pass
+
+        # Redirect back to prescreening report
+        return redirect('view_prescreening_report')
+
+    except Exception as e:
+        logger.error(f"Error recording award decision: {e}")
+        return HttpResponse(f"Error: {str(e)}", status=500)
+
+
 def view_request_logs(request):
     """View to display all information requests in a table format.
     
@@ -2616,3 +3054,92 @@ def view_request_logs(request):
     }
     
     return render(request, 'reports_app/request_logs.html', context)
+
+
+# Implementation of the prescreening report view with award decision functionality SFWE-504_3-LLR-28.
+def view_prescreening_report(request):
+    """View to display prescreening report with award decision functionality.
+    
+    Shows qualified applicants for each scholarship with the ability to:
+    - Award scholarships
+    - Add decision comments
+    - View current decision status
+    """
+    engine = ReportEngine()
+    # All applicants in the system (ordered by name for dropdown convenience)
+    applicants = list(Applicant.objects.all().order_by('name'))
+    
+    # Only show the most recent scholarships displayed on home page (latest of each name)
+    # The home page creates new instances each time, so we get the most recent ones
+    engineering_scholarship = Scholarship.objects.filter(
+        name="Engineering Excellence Scholarship"
+    ).order_by('-id').first()
+    
+    cs_scholarship = Scholarship.objects.filter(
+        name="CS Leadership Scholarship"
+    ).order_by('-id').first()
+    
+    all_scholarships = [s for s in [engineering_scholarship, cs_scholarship] if s is not None]
+    
+    # Check which scholarships have been awarded
+    awarded_scholarship_names = set()
+    for scholarship in all_scholarships:
+        # A scholarship is considered "awarded" if there's at least one awarded decision for it
+        has_award = AwardDecision.objects.filter(
+            scholarship_name=scholarship.name,
+            decision='awarded'
+        ).exists()
+        scholarship.is_awarded = has_award
+        if has_award:
+            awarded_scholarship_names.add(scholarship.name)
+    
+    # Filter to show only non-awarded scholarships as available
+    available_scholarships = [s for s in all_scholarships if not s.is_awarded]
+    
+    # Generate prescreening report
+    report_data = engine.generate_prescreening_report(applicants)
+    
+    # Enhance qualified applicants with existing decisions
+    for scholarship_match in report_data.get('matches', []):
+        scholarship_name = scholarship_match['scholarship_name']
+        for match in scholarship_match.get('matches', []):
+            applicant_info = match['applicant']
+            student_id = applicant_info['student_id']
+            
+            # Try to get existing applicant object and decision
+            try:
+                applicant_obj = Applicant.objects.get(student_id=student_id)
+                decision = AwardDecision.objects.filter(
+                    applicant=applicant_obj,
+                    scholarship_name=scholarship_name
+                ).first()
+                
+                if decision:
+                    match['current_decision'] = {
+                        'decision': decision.decision,
+                        'comments': decision.comments,
+                        'decided_at': decision.decided_at
+                    }
+                else:
+                    match['current_decision'] = None
+            except Applicant.DoesNotExist:
+                match['current_decision'] = None
+    
+    # Override scholarships_evaluated to reflect only available (non-awarded) scholarships
+    report_data['scholarships_evaluated'] = len(available_scholarships)
+    
+    # Calculate total awarded count from all AwardDecision records (not just matched applicants)
+    total_awarded_count = AwardDecision.objects.filter(decision='awarded').count()
+    report_data['summary']['award_decisions']['awarded'] = total_awarded_count
+    
+    context = {
+        'report': report_data,
+        'scholarships': available_scholarships,  # Only show non-awarded scholarships
+        'all_scholarships': all_scholarships,  # All scholarships for dropdown in modal
+        'all_applicants': applicants,  # Provide full applicant list for award modal dropdown
+        'total_applicants': len(applicants),
+        'generated_date': report_data.get('generated_date', datetime.now())
+    }
+    
+    return render(request, 'reports_app/prescreening_report.html', context)
+
