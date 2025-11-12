@@ -891,8 +891,9 @@ END OF LOG
             applicant = award.applicant
             # Skip placeholder or temporary users
             if (not applicant or not getattr(applicant, 'name', None) or 
-                applicant.name.lower().strip() in ['temp user', 'temp'] or 
-                ('temp' in applicant.name.lower() and 'user' in applicant.name.lower())):
+                applicant.name.lower().strip() in ['temp user', 'temp', 'test user', 'test'] or 
+                ('temp' in applicant.name.lower() and 'user' in applicant.name.lower()) or
+                ('test' in applicant.name.lower() and 'user' in applicant.name.lower())):
                 continue
 
             award_amount = float(award.award_amount)
@@ -4227,6 +4228,30 @@ def view_request_logs(request):
     }
     
     return render(request, 'reports_app/request_logs.html', context)
+
+
+def clear_request_logs(request):
+    """View to clear all information request logs.
+    
+    Deletes all ReviewerInformationRequest records from the database.
+    Redirects back to the request logs page after clearing.
+    """
+    if request.method == 'POST':
+        # Delete all information requests
+        ReviewerInformationRequest.objects.all().delete()
+        
+        # Optionally delete log files if they exist
+        import os
+        logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'information_request_logs')
+        if os.path.exists(logs_dir):
+            import shutil
+            try:
+                shutil.rmtree(logs_dir)
+                os.makedirs(logs_dir, exist_ok=True)
+            except Exception as e:
+                pass  # If log files can't be deleted, continue anyway
+    
+    return redirect('view_request_logs')
 
 
 # Implementation of the prescreening report view with award decision functionality SFWE-504_3-LLR-28.
