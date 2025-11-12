@@ -889,6 +889,12 @@ END OF LOG
         
         for award in awards_queryset:
             applicant = award.applicant
+            # Skip placeholder or temporary users
+            if (not applicant or not getattr(applicant, 'name', None) or 
+                applicant.name.lower().strip() in ['temp user', 'temp'] or 
+                ('temp' in applicant.name.lower() and 'user' in applicant.name.lower())):
+                continue
+
             award_amount = float(award.award_amount)
             total_awarded += award_amount
             
@@ -1198,6 +1204,7 @@ END OF LOG
                     'description': scholarship.description,
                     'amount': scholarship.amount,
                     'deadline': scholarship.deadline,
+                    'eligibility_criteria': scholarship.eligibility_criteria,
                     'matches': scholarship_matches,
                     'qualification_distribution': {
                         'min_score': min(qualification_scores) if qualification_scores else 0,
@@ -1562,6 +1569,12 @@ END OF LOG
                     f"Deadline: {scholarship_match['deadline'].strftime('%Y-%m-%d')}",
                     styles['Normal']
                 ))
+            # Eligibility Criteria Section
+            if scholarship_match.get('eligibility_criteria'):
+                story.append(Paragraph("Eligibility Criteria:", styles['Heading3']))
+                for criteria in scholarship_match['eligibility_criteria']:
+                    story.append(Paragraph(f"• {criteria}", styles['Normal']))
+                story.append(Paragraph("<br/>", styles['Normal']))
             
             # Table of matching applicants with review scores
             story.append(Paragraph("Qualified Applicants:", styles['Heading3']))
@@ -1699,13 +1712,14 @@ END OF LOG
             
             # Write detailed matches for each scholarship
             writer.writerow(['Scholarship Matches'])
-            writer.writerow(['Scholarship Name', 'Applicant Name', 'Student ID', 'Major', 'GPA', 
+            writer.writerow(['Scholarship Name', 'Eligibility Criteria', 'Applicant Name', 'Student ID', 'Major', 'GPA', 
                            'Academic Level', 'Application Status', 'Qualification Score', 
-                           'Requirements Met', 'Requirements Pending', 'Review Score', 'Has Interview', 
-                           'Has Committee Feedback', 'Award Decision', 'Decision Comments'])
+                           'Review Score', 'Has Interview', 'Has Committee Feedback', 'Award Decision', 'Decision Comments'])
             
             for match in report_data['matches']:
                 scholarship_name = match['scholarship_name']
+                eligibility_list = match.get('eligibility_criteria', [])
+                eligibility_str = '; '.join(eligibility_list) if isinstance(eligibility_list, list) else str(eligibility_list)
                 for applicant_match in match['matches']:
                     applicant = applicant_match['applicant']
                     review_data = applicant_match['review_data']
@@ -1726,6 +1740,7 @@ END OF LOG
 
                     writer.writerow([
                         scholarship_name,
+                        eligibility_str,
                         applicant['name'],
                         applicant['student_id'],
                         applicant['major'],
@@ -1733,8 +1748,6 @@ END OF LOG
                         applicant['academic_level'],
                         applicant_match['application_status']['status'].title(),
                         f"{applicant_match['qualification_score']:.1f}%",
-                        '; '.join(applicant_match.get('criteria_met', [])),
-                        '; '.join(applicant_match.get('requirements_pending', [])),
                         avg_review_score,
                         'Yes' if review_data.get('interview_notes') else 'No',
                         'Yes' if review_data.get('committee_feedback') else 'No',
@@ -1851,6 +1864,13 @@ END OF LOG
             ws_matches['A4'] = "Deadline:"
             ws_matches['B4'] = (scholarship_match['deadline'].strftime('%Y-%m-%d') 
                               if scholarship_match['deadline'] else "No deadline set")
+            # Eligibility Criteria
+            ws_matches['A5'] = "Eligibility Criteria:"
+            eligibility_list = scholarship_match.get('eligibility_criteria', [])
+            if isinstance(eligibility_list, list):
+                ws_matches['B5'] = '; '.join(eligibility_list)
+            else:
+                ws_matches['B5'] = str(eligibility_list) if eligibility_list else 'N/A'
             
             # Matching applicants with review scores
             ws_matches['A6'] = "Qualified Applicants"
