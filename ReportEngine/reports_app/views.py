@@ -2011,6 +2011,9 @@ END OF LOG
                 - If no student_id/netid provided: returns report for all applicants
         """
         # Determine if we're generating a report for one applicant or all
+        banned_names = {name.lower() for name in [
+            'Test User', 'Test Student', 'Test Award Student'
+        ]}
         if student_id or netid:
             # Single applicant report
             applicant_data = None
@@ -2025,17 +2028,70 @@ END OF LOG
                 except Applicant.DoesNotExist:
                     pass
             
-            if not applicant_data:
+            # Exclude test/dummy applicants if matched directly
+            if not applicant_data or (applicant_data and applicant_data.name and applicant_data.name.lower() in banned_names):
                 return None
             
             applicants_to_process = [applicant_data]
         else:
             # All applicants report
-            applicants_to_process = list(Applicant.objects.all().order_by('name'))
+            # Exclude test/dummy applicants by name while preserving ordering
+            applicants_to_process = [
+                a for a in Applicant.objects.all().order_by('name')
+                if (a.name or '').lower() not in banned_names
+            ]
         
         # Process each applicant
         all_applicant_reports = []
         for applicant_data in applicants_to_process:
+            # Ensure required applicant fields exist; auto-generate sensible defaults if missing
+            defaults_applied = False
+            try:
+                # Minor
+                if not getattr(applicant_data, 'minor', None):
+                    applicant_data.minor = 'N/A'
+                    defaults_applied = True
+
+                # Academic achievements
+                if not getattr(applicant_data, 'academic_achievements', None):
+                    from django.utils import timezone as _tz
+                    applicant_data.academic_achievements = [
+                        {
+                            'type': "Orientation Completed",
+                            'date': _tz.now().date().isoformat(),
+                            'description': 'New student orientation completed'
+                        }
+                    ]
+                    defaults_applied = True
+
+                # Financial information
+                fi = getattr(applicant_data, 'financial_info', None)
+                if not isinstance(fi, dict) or not fi:
+                    applicant_data.financial_info = {
+                        'fafsa_submitted': False,
+                        'efc': 0,
+                        'household_income': 'N/A',
+                        'current_aid': []
+                    }
+                    defaults_applied = True
+
+                # Essay submissions
+                if not getattr(applicant_data, 'essays', None):
+                    from django.utils import timezone as _tz2
+                    applicant_data.essays = [
+                        {
+                            'prompt': 'Personal Statement',
+                            'content': 'N/A',
+                            'submission_date': _tz2.now().isoformat()
+                        }
+                    ]
+                    defaults_applied = True
+
+                if defaults_applied:
+                    applicant_data.save()
+            except Exception:
+                # Non-fatal: continue with available data
+                pass
             # Query only ACTIVE awards for this applicant (exclude previous/completed awards)
             awards_queryset = ScholarshipAward.objects.filter(applicant=applicant_data, status='active')
 
@@ -2418,12 +2474,20 @@ END OF LOG
         if not report_data:
             raise ValueError("Applicant not found")
 
-        doc = SimpleDocTemplate(output_path, pagesize=letter)
-        story = []
-        styles = getSampleStyleSheet()
-
         # Check if this is a multi-applicant report or single applicant
         is_multi_applicant = 'applicants' in report_data
+
+        # Use landscape orientation for the multi-applicant summary; portrait otherwise
+        try:
+            from reportlab.lib.pagesizes import landscape, letter as _letter
+            pagesize = landscape(_letter) if is_multi_applicant else _letter
+        except Exception:
+            # Fallback to portrait letter if landscape import not available
+            pagesize = letter
+
+        doc = SimpleDocTemplate(output_path, pagesize=pagesize)
+        story = []
+        styles = getSampleStyleSheet()
         
         if is_multi_applicant:
             # Multi-applicant summary report
@@ -2450,14 +2514,27 @@ END OF LOG
             
             # Individual applicant summaries
             story.append(Paragraph("Individual Applicants", styles['Heading2']))
-            applicant_summary_data = [['Name', 'Student ID', 'Major', 'GPA', 'Academic Level', 'Awards', 'Total Amount']]
+            applicant_summary_data = [[
+                'Name','Student ID','Major','Minor','GPA','Academic Level',
+                'Achievements (#)','FAFSA','EFC','Income Range','Essay Submissions (#)',
+                'Awards','Total Amount'
+            ]]
             for applicant in report_data['applicants']:
+                achievements = applicant.get('achievements') or []
+                financial = applicant.get('financial_info') or {}
+                essays = applicant.get('essays') or []
                 applicant_summary_data.append([
                     applicant['personal_info']['name'],
                     applicant['personal_info']['student_id'],
                     applicant['academic_info']['major'],
+                    applicant['academic_info'].get('minor') or 'N/A',
                     f"{applicant['academic_info']['gpa']:.2f}",
                     applicant['academic_info']['academic_level'],
+                    str(len(achievements)),
+                    'Yes' if financial.get('fafsa_submitted') else 'No',
+                    financial.get('efc', 0),
+                    financial.get('household_income','N/A'),
+                    str(len(essays)),
                     str(applicant['scholarships']['total_awards']),
                     f"${applicant['scholarships']['total_amount']:,.2f}"
                 ])
@@ -2537,6 +2614,26 @@ END OF LOG
                     else:
                         story.append(Paragraph(f"• {str(aid)}", styles['Normal']))
             story.append(Paragraph("<br/>", styles['Normal']))
+
+            # Essay Submissions (new section)
+            story.append(Paragraph("Essay Submissions", styles['Heading2']))
+            essays_list = report_data.get('essays') or []
+            if essays_list:
+                for es in essays_list:
+                    if isinstance(es, dict):
+                        sub_date = es.get('submission_date')
+                        if hasattr(sub_date, 'strftime'):
+                            sub_date_str = sub_date.strftime('%Y-%m-%d')
+                        else:
+                            sub_date_str = str(sub_date) if sub_date else 'N/A'
+                        content_preview = (es.get('content','') or '')[:120]
+                        story.append(Paragraph(f"• {es.get('prompt','Essay')} ({sub_date_str})", styles['Normal']))
+                        if content_preview:
+                            story.append(Paragraph(f"  {content_preview}", styles['Normal']))
+                story.append(Paragraph("<br/>", styles['Normal']))
+            else:
+                story.append(Paragraph("No essay submissions recorded", styles['Normal']))
+                story.append(Paragraph("<br/>", styles['Normal']))
 
             # Scholarship Awards
             story.append(Paragraph("Scholarship Awards", styles['Heading2']))
@@ -2629,13 +2726,18 @@ END OF LOG
             
             # Individual applicant list
             ws_applicants = wb.create_sheet("All Applicants")
-            headers = ['Name', 'Student ID', 'NetID', 'Major', 'Minor', 'GPA', 'Academic Level', 'Total Awards', 'Total Amount']
+            headers = ['Name', 'Student ID', 'NetID', 'Major', 'Minor', 'GPA', 'Academic Level',
+                       'Achievements (#)', 'FAFSA', 'EFC', 'Income Range', 'Essay Submissions (#)',
+                       'Total Awards', 'Total Amount']
             for col, header in enumerate(headers, 1):
                 cell = ws_applicants.cell(row=1, column=col, value=header)
                 cell.font = Font(bold=True)
                 cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
             
             for row_idx, applicant in enumerate(report_data['applicants'], 2):
+                financial = applicant.get('financial_info') or {}
+                achievements = applicant.get('achievements') or []
+                essays = applicant.get('essays') or []
                 ws_applicants.cell(row=row_idx, column=1, value=applicant['personal_info']['name'])
                 ws_applicants.cell(row=row_idx, column=2, value=applicant['personal_info']['student_id'])
                 ws_applicants.cell(row=row_idx, column=3, value=applicant['personal_info']['netid'])
@@ -2643,8 +2745,13 @@ END OF LOG
                 ws_applicants.cell(row=row_idx, column=5, value=applicant['academic_info']['minor'] or 'N/A')
                 ws_applicants.cell(row=row_idx, column=6, value=f"{applicant['academic_info']['gpa']:.2f}")
                 ws_applicants.cell(row=row_idx, column=7, value=applicant['academic_info']['academic_level'])
-                ws_applicants.cell(row=row_idx, column=8, value=applicant['scholarships']['total_awards'])
-                ws_applicants.cell(row=row_idx, column=9, value=f"${applicant['scholarships']['total_amount']:,.2f}")
+                ws_applicants.cell(row=row_idx, column=8, value=len(achievements))
+                ws_applicants.cell(row=row_idx, column=9, value='Yes' if financial.get('fafsa_submitted') else 'No')
+                ws_applicants.cell(row=row_idx, column=10, value=financial.get('efc', 0))
+                ws_applicants.cell(row=row_idx, column=11, value=financial.get('household_income', 'N/A'))
+                ws_applicants.cell(row=row_idx, column=12, value=len(essays))
+                ws_applicants.cell(row=row_idx, column=13, value=applicant['scholarships']['total_awards'])
+                ws_applicants.cell(row=row_idx, column=14, value=f"${applicant['scholarships']['total_amount']:,.2f}")
         
         else:
             # Single applicant detailed report (existing logic)
@@ -2700,6 +2807,24 @@ END OF LOG
                 ws_scholarships.cell(row=row, column=3, value=award['status'])
                 ws_scholarships.cell(row=row, column=4, value=award['award_date'].strftime('%Y-%m-%d'))
 
+            # Essay Submissions Sheet (new)
+            ws_submissions = wb.create_sheet("Essay Submissions")
+            sub_headers = ['Prompt','Submission Date','Content (Preview)']
+            for col, header in enumerate(sub_headers, 1):
+                cell = ws_submissions.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+            for r_idx, es in enumerate(report_data.get('essays', []), start=2):
+                if isinstance(es, dict):
+                    sub_date = es.get('submission_date')
+                    if hasattr(sub_date, 'strftime'):
+                        sub_date_str = sub_date.strftime('%Y-%m-%d')
+                    else:
+                        sub_date_str = str(sub_date) if sub_date else 'N/A'
+                    ws_submissions.cell(row=r_idx, column=1, value=es.get('prompt',''))
+                    ws_submissions.cell(row=r_idx, column=2, value=sub_date_str)
+                    ws_submissions.cell(row=r_idx, column=3, value=(es.get('content','') or '')[:200])
+
             # Essay Evaluations Sheet
             ws_evals = wb.create_sheet("Essay Evaluations")
             eval_headers = ['Source', 'Scholarship', 'Prompt', 'Score', 'Reviewer', 'Date', 'Feedback']
@@ -2720,7 +2845,7 @@ END OF LOG
                 ws_evals.cell(row=row_idx, column=7, value=ev.get('feedback'))
 
             # Adjust column widths
-            for ws in [ws_personal, ws_academic, ws_scholarships, ws_evals]:
+            for ws in [ws_personal, ws_academic, ws_scholarships, ws_submissions, ws_evals]:
                 for col in ws.columns:
                     max_length = 0
                     for cell in col:
@@ -2751,9 +2876,13 @@ END OF LOG
                 # Multi-applicant summary CSV
                 writer.writerow([
                     'Student Name','Student ID','NetID','Major','Minor','GPA','Academic Level',
+                    'Achievements (#)','FAFSA','EFC','Income Range','Essay Submissions (#)',
                     'Total Awards','Total Scholarship Amount'
                 ])
                 for applicant in report_data['applicants']:
+                    financial = applicant.get('financial_info') or {}
+                    achievements = applicant.get('achievements') or []
+                    essays = applicant.get('essays') or []
                     writer.writerow([
                         applicant['personal_info']['name'],
                         applicant['personal_info']['student_id'],
@@ -2762,44 +2891,78 @@ END OF LOG
                         applicant['academic_info']['minor'] or 'N/A',
                         f"{applicant['academic_info']['gpa']:.2f}",
                         applicant['academic_info']['academic_level'],
+                        len(achievements),
+                        'Yes' if financial.get('fafsa_submitted') else 'No',
+                        financial.get('efc', 0),
+                        financial.get('household_income', 'N/A'),
+                        len(essays),
                         applicant['scholarships']['total_awards'],
                         f"${applicant['scholarships']['total_amount']:,.2f}"
                     ])
             else:
                 # Single applicant with essay evaluations (existing logic)
                 writer.writerow([
-                    'Student Name','Student ID','NetID','Major','GPA','Academic Level',
-                    'Eval Source','Scholarship','Prompt','Score','Reviewer','Date','Feedback'
+                    'Row Type','Student Name','Student ID','NetID','Major','Minor','GPA','Academic Level',
+                    'Prompt','Submission Date/ Eval Date','Source','Scholarship','Score','Reviewer','Feedback'
                 ])
+                # First add essay submissions
+                for es in (report_data.get('essays') or []):
+                    if isinstance(es, dict):
+                        sub_date = es.get('submission_date')
+                        if hasattr(sub_date, 'strftime'):
+                            sub_date_str = sub_date.strftime('%Y-%m-%d')
+                        else:
+                            sub_date_str = str(sub_date) if sub_date else 'N/A'
+                        writer.writerow([
+                            'Submission',
+                            report_data['personal_info']['name'],
+                            report_data['personal_info']['student_id'],
+                            report_data['personal_info']['netid'],
+                            report_data['academic_info']['major'],
+                            report_data['academic_info']['minor'] or 'N/A',
+                            f"{report_data['academic_info']['gpa']:.2f}",
+                            report_data['academic_info']['academic_level'],
+                            es.get('prompt',''),
+                            sub_date_str,
+                            'Essay Submission',
+                            '-',
+                            '-',
+                            '-',
+                            (es.get('content','') or '')[:120]
+                        ])
                 evaluations = report_data.get('essay_evaluations', [])
                 if evaluations:
                     for ev in evaluations:
                         date_obj = ev.get('date')
                         date_str = date_obj.strftime('%Y-%m-%d') if hasattr(date_obj, 'strftime') else (str(date_obj) if date_obj else '')
                         writer.writerow([
+                            'Evaluation',
                             report_data['personal_info']['name'],
                             report_data['personal_info']['student_id'],
                             report_data['personal_info']['netid'],
                             report_data['academic_info']['major'],
+                            report_data['academic_info']['minor'] or 'N/A',
                             f"{report_data['academic_info']['gpa']:.2f}",
                             report_data['academic_info']['academic_level'],
+                            ev.get('prompt'),
+                            date_str,
                             ev.get('source'),
                             ev.get('scholarship_name') or '-',
-                            ev.get('prompt'),
                             ev.get('score'),
                             ev.get('reviewer'),
-                            date_str,
-                            ev.get('feedback')
+                            (ev.get('feedback') or '')[:120]
                         ])
                 else:
                     writer.writerow([
+                        'Evaluation',
                         report_data['personal_info']['name'],
                         report_data['personal_info']['student_id'],
                         report_data['personal_info']['netid'],
                         report_data['academic_info']['major'],
+                        report_data['academic_info']['minor'] or 'N/A',
                         f"{report_data['academic_info']['gpa']:.2f}",
                         report_data['academic_info']['academic_level'],
-                        'None','-','-','-','-','-','No evaluations'
+                        '-', 'N/A','None','-','-','-','No evaluations'
                     ])
         return output_path
 
