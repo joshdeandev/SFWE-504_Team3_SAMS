@@ -344,6 +344,14 @@ END OF LOG
             scholarship_awards = ScholarshipAward.objects.filter(scholarship_name=scholarship.name)
             
             for award in scholarship_awards:
+                # Skip awards for "Test User" applicants
+                if award.applicant and (
+                    'test user' in award.applicant.name.lower() or 
+                    award.applicant.name.lower() == 'test' or
+                    'test' in award.applicant.name.lower() and 'user' in award.applicant.name.lower()
+                ):
+                    continue
+                
                 # Normalize award_date (handle strings from JSONField or datetimes)
                 award_date = award.award_date
                 if isinstance(award_date, str):
@@ -475,7 +483,11 @@ END OF LOG
                 'amount': s.amount,
                 'frequency': s.frequency,
                 'deadline': s.deadline,
-                'description': s.description
+                'description': s.description,
+                'review_dates': s.review_dates,
+                'reporting_schedule': s.reporting_schedule,
+                'eligibility_criteria': s.eligibility_criteria,
+                'disbursement_requirements': s.disbursement_requirements
             } for s in donor_scholarships]
         }
 
@@ -522,15 +534,21 @@ END OF LOG
                     
         # Key Dates Sheet
         ws_dates = wb.create_sheet("Key Dates")
-        date_headers = ['Type', 'Scholarship', 'Date']
+        date_headers = ['Type', 'Scholarship', 'Date', 'Details']
         
         # Combine all dates
         all_dates = (
-            [['Deadline'] + [d['scholarship'], d['deadline'].strftime('%Y-%m-%d')] 
+            [['Application Deadline', d['scholarship'], 
+              d['deadline'].strftime('%Y-%m-%d') if hasattr(d['deadline'], 'strftime') else str(d['deadline']),
+              d.get('type', 'Application Deadline')] 
              for d in report_data['key_dates']['upcoming_deadlines']] +
-            [['Review'] + [d['scholarship'], d['date'].strftime('%Y-%m-%d')] 
+            [['Performance Review', d['scholarship'], 
+              d['date'].strftime('%Y-%m-%d') if hasattr(d['date'], 'strftime') else str(d['date']),
+              d.get('type', 'Performance Review')] 
              for d in report_data['key_dates']['upcoming_reviews']] +
-            [['Report'] + [d['scholarship'], d['date'].strftime('%Y-%m-%d')] 
+            [['Reporting Requirement', d['scholarship'], 
+              d['date'].strftime('%Y-%m-%d') if hasattr(d['date'], 'strftime') else str(d['date']),
+              d.get('type', 'Report Due')] 
              for d in report_data['key_dates']['reporting_requirements']]
         )
         
@@ -539,6 +557,31 @@ END OF LOG
                 cell = ws_dates.cell(row=row_idx, column=col_idx, value=value)
                 if row_idx == 1:  # Headers
                     cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+        
+        # Scholarship Details Sheet
+        ws_scholarships = wb.create_sheet("Scholarship Details")
+        scholarship_headers = ['Name', 'Amount', 'Frequency', 'Deadline', 'Description', 
+                              'Eligibility Criteria', 'Requirements']
+        
+        scholarship_data = []
+        for s in report_data['scholarships']:
+            scholarship_data.append([
+                s['name'],
+                f"${s['amount']:,.2f}",
+                s['frequency'],
+                s['deadline'].strftime('%Y-%m-%d') if s.get('deadline') and hasattr(s['deadline'], 'strftime') else str(s.get('deadline', 'N/A')),
+                s['description'],
+                '; '.join(s.get('eligibility_criteria', [])) if isinstance(s.get('eligibility_criteria'), list) else str(s.get('eligibility_criteria', 'N/A')),
+                '; '.join(s.get('disbursement_requirements', [])) if isinstance(s.get('disbursement_requirements'), list) else str(s.get('disbursement_requirements', 'N/A'))
+            ])
+        
+        for row_idx, row in enumerate([scholarship_headers] + scholarship_data, 1):
+            for col_idx, value in enumerate(row, 1):
+                cell = ws_scholarships.cell(row=row_idx, column=col_idx, value=value)
+                if row_idx == 1:  # Headers
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
         
         # Active Awards Sheet
         ws_active = wb.create_sheet("Active Awards")
@@ -563,7 +606,7 @@ END OF LOG
                     cell.font = Font(bold=True)
         
         # Adjust column widths
-        for ws in [ws_summary, ws_dates, ws_active]:
+        for ws in [ws_summary, ws_dates, ws_scholarships, ws_active]:
             for col in ws.columns:
                 max_length = 0
                 for cell in col:
@@ -613,20 +656,43 @@ END OF LOG
             writer.writerow([])
             
             # Key Dates Section
-            writer.writerow(['Key Dates'])
-            writer.writerow(['Type', 'Scholarship', 'Date'])
+            writer.writerow(['Type', 'Scholarship', 'Date', 'Details'])
             
             for deadline in report_data['key_dates']['upcoming_deadlines']:
-                writer.writerow(['Deadline', deadline['scholarship'], 
-                               deadline['deadline'].strftime('%Y-%m-%d')])
+                deadline_str = deadline['deadline'].strftime('%Y-%m-%d') if hasattr(deadline['deadline'], 'strftime') else str(deadline['deadline'])
+                writer.writerow(['Application Deadline', deadline['scholarship'], 
+                               deadline_str, deadline.get('type', 'Application Deadline')])
             
             for review in report_data['key_dates']['upcoming_reviews']:
-                writer.writerow(['Review', review['scholarship'], 
-                               review['date'].strftime('%Y-%m-%d')])
+                review_str = review['date'].strftime('%Y-%m-%d') if hasattr(review['date'], 'strftime') else str(review['date'])
+                writer.writerow(['Performance Review', review['scholarship'], 
+                               review_str, review.get('type', 'Performance Review')])
             
             for report in report_data['key_dates']['reporting_requirements']:
-                writer.writerow(['Report', report['scholarship'], 
-                               report['date'].strftime('%Y-%m-%d')])
+                report_str = report['date'].strftime('%Y-%m-%d') if hasattr(report['date'], 'strftime') else str(report['date'])
+                writer.writerow(['Reporting Requirement', report['scholarship'], 
+                               report_str, report.get('type', 'Report Due')])
+            writer.writerow([])
+            
+            # Scholarship Details Section
+            writer.writerow(['Scholarship Details'])
+            writer.writerow(['Name', 'Amount', 'Frequency', 'Deadline', 'Description', 
+                           'Eligibility Criteria', 'Requirements'])
+            
+            for s in report_data['scholarships']:
+                deadline_str = s['deadline'].strftime('%Y-%m-%d') if s.get('deadline') and hasattr(s['deadline'], 'strftime') else str(s.get('deadline', 'N/A'))
+                eligibility = '; '.join(s.get('eligibility_criteria', [])) if isinstance(s.get('eligibility_criteria'), list) else str(s.get('eligibility_criteria', 'N/A'))
+                requirements = '; '.join(s.get('disbursement_requirements', [])) if isinstance(s.get('disbursement_requirements'), list) else str(s.get('disbursement_requirements', 'N/A'))
+                
+                writer.writerow([
+                    s['name'],
+                    f"${s['amount']:,.2f}",
+                    s['frequency'],
+                    deadline_str,
+                    s['description'],
+                    eligibility,
+                    requirements
+                ])
             writer.writerow([])
             
             # Active Awards Section
@@ -696,22 +762,62 @@ END OF LOG
         story.append(Paragraph("<br/>", styles['Normal']))
 
         # Key Dates Section
-        story.append(Paragraph("Key Dates and Deadlines", styles['Heading2']))
         if report_data['key_dates']['upcoming_deadlines']:
-            story.append(Paragraph("Upcoming Deadlines:", styles['Heading3']))
+            story.append(Paragraph("Upcoming Application Deadlines:", styles['Heading3']))
             for deadline in report_data['key_dates']['upcoming_deadlines']:
+                deadline_str = deadline['deadline'].strftime('%Y-%m-%d') if hasattr(deadline['deadline'], 'strftime') else str(deadline['deadline'])
                 story.append(Paragraph(
-                    f"• {deadline['scholarship']}: {deadline['deadline'].strftime('%Y-%m-%d')}",
+                    f"• {deadline['scholarship']}: {deadline_str} ({deadline.get('type', 'Application Deadline')})",
                     styles['Normal']
                 ))
+            story.append(Paragraph("<br/>", styles['Normal']))
 
         if report_data['key_dates']['upcoming_reviews']:
-            story.append(Paragraph("Upcoming Reviews:", styles['Heading3']))
+            story.append(Paragraph("Upcoming Performance Reviews:", styles['Heading3']))
             for review in report_data['key_dates']['upcoming_reviews']:
+                review_date_str = review['date'].strftime('%Y-%m-%d') if hasattr(review['date'], 'strftime') else str(review['date'])
                 story.append(Paragraph(
-                    f"• {review['scholarship']}: {review['date'].strftime('%Y-%m-%d')}",
+                    f"• {review['scholarship']}: {review_date_str} ({review.get('type', 'Performance Review')})",
                     styles['Normal']
                 ))
+            story.append(Paragraph("<br/>", styles['Normal']))
+        
+        if report_data['key_dates']['reporting_requirements']:
+            story.append(Paragraph("Upcoming Reporting Requirements:", styles['Heading3']))
+            for requirement in report_data['key_dates']['reporting_requirements']:
+                req_date_str = requirement['date'].strftime('%Y-%m-%d') if hasattr(requirement['date'], 'strftime') else str(requirement['date'])
+                story.append(Paragraph(
+                    f"• {requirement['scholarship']}: {requirement['type']} - {req_date_str}",
+                    styles['Normal']
+                ))
+            story.append(Paragraph("<br/>", styles['Normal']))
+        
+        # Scholarship Details Section with Key Dates
+        if report_data['scholarships']:
+            story.append(Paragraph("Scholarship Details", styles['Heading2']))
+            for scholarship in report_data['scholarships']:
+                story.append(Paragraph(f"{scholarship['name']}", styles['Heading3']))
+                story.append(Paragraph(f"Amount: ${scholarship['amount']:,.2f} ({scholarship['frequency']})", styles['Normal']))
+                
+                if scholarship.get('deadline'):
+                    deadline_str = scholarship['deadline'].strftime('%Y-%m-%d') if hasattr(scholarship['deadline'], 'strftime') else str(scholarship['deadline'])
+                    story.append(Paragraph(f"Application Deadline: {deadline_str}", styles['Normal']))
+                
+                story.append(Paragraph(f"Description: {scholarship['description']}", styles['Normal']))
+                
+                # Show eligibility criteria
+                if scholarship.get('eligibility_criteria'):
+                    story.append(Paragraph("Eligibility Criteria:", styles['Heading4']))
+                    for criteria in scholarship['eligibility_criteria']:
+                        story.append(Paragraph(f"• {criteria}", styles['Normal']))
+                
+                # Show disbursement requirements
+                if scholarship.get('disbursement_requirements'):
+                    story.append(Paragraph("Disbursement Requirements:", styles['Heading4']))
+                    for req in scholarship['disbursement_requirements']:
+                        story.append(Paragraph(f"• {req}", styles['Normal']))
+                
+                story.append(Paragraph("<br/>", styles['Normal']))
 
         # Active Awards Section
         story.append(Paragraph("Active Awards", styles['Heading2']))
@@ -2149,6 +2255,27 @@ END OF LOG
             story.append(Paragraph(f"Deadline: {scholarship['deadline']}", styles['Normal']))
             story.append(Paragraph(f"Frequency: {scholarship['frequency']}", styles['Normal']))
             
+            # Donor/Sponsor Information
+            donor_info = scholarship.get('donor', {})
+            if donor_info:
+                story.append(Paragraph("Donor/Sponsor Information:", styles['Heading4']))
+                donor_name = donor_info.get('name', 'N/A')
+                donor_contact = donor_info.get('contact', 'N/A')
+                donor_org = donor_info.get('organization', donor_info.get('name', 'N/A'))
+                donor_phone = donor_info.get('phone', 'N/A')
+                donor_email = donor_info.get('email', donor_contact if '@' in str(donor_contact) else 'N/A')
+                donor_address = donor_info.get('address', 'N/A')
+                
+                story.append(Paragraph(f"Name: {donor_name}", styles['Normal']))
+                if donor_contact != 'N/A':
+                    story.append(Paragraph(f"Contact: {donor_contact}", styles['Normal']))
+                if donor_email != 'N/A' and donor_email != donor_contact:
+                    story.append(Paragraph(f"Email: {donor_email}", styles['Normal']))
+                if donor_phone != 'N/A':
+                    story.append(Paragraph(f"Phone: {donor_phone}", styles['Normal']))
+                if donor_address != 'N/A':
+                    story.append(Paragraph(f"Address: {donor_address}", styles['Normal']))
+            
             # Description
             story.append(Paragraph("Description:", styles['Heading4']))
             story.append(Paragraph(scholarship['description'], styles['Normal']))
@@ -2197,7 +2324,7 @@ END OF LOG
             
         # Scholarships Sheet
         ws_details = wb.create_sheet("Scholarship Details")
-        headers = ['Name', 'Amount', 'Deadline', 'Frequency', 'Description']
+        headers = ['Name', 'Amount', 'Deadline', 'Frequency', 'Description', 'Donor Name', 'Donor Contact', 'Donor Email', 'Donor Phone']
         for col, header in enumerate(headers, 1):
             cell = ws_details.cell(row=1, column=col)
             cell.value = header
@@ -2205,11 +2332,21 @@ END OF LOG
             cell.fill = PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
             
         for row, scholarship in enumerate(report_data['scholarships'], 2):
+            donor_info = scholarship.get('donor', {})
+            donor_name = donor_info.get('name', 'N/A') if donor_info else 'N/A'
+            donor_contact = donor_info.get('contact', 'N/A') if donor_info else 'N/A'
+            donor_email = donor_info.get('email', donor_contact if '@' in str(donor_contact) else 'N/A') if donor_info else 'N/A'
+            donor_phone = donor_info.get('phone', 'N/A') if donor_info else 'N/A'
+            
             ws_details.cell(row=row, column=1, value=scholarship['name'])
             ws_details.cell(row=row, column=2, value=f"${scholarship['amount']:,.2f}")
             ws_details.cell(row=row, column=3, value=scholarship['deadline'])
             ws_details.cell(row=row, column=4, value=scholarship['frequency'])
             ws_details.cell(row=row, column=5, value=scholarship['description'])
+            ws_details.cell(row=row, column=6, value=donor_name)
+            ws_details.cell(row=row, column=7, value=donor_contact)
+            ws_details.cell(row=row, column=8, value=donor_email)
+            ws_details.cell(row=row, column=9, value=donor_phone)
 
         # Adjust column widths
         for ws in [ws_summary, ws_details]:
@@ -2250,9 +2387,15 @@ END OF LOG
             # Write scholarship details
             writer.writerow(['Scholarship Details'])
             writer.writerow(['Name', 'Amount', 'Deadline', 'Frequency', 'Description', 
-                           'Eligibility Criteria', 'Requirements'])
+                           'Eligibility Criteria', 'Requirements', 'Donor Name', 'Donor Contact', 'Donor Email', 'Donor Phone'])
             
             for scholarship in report_data['scholarships']:
+                donor_info = scholarship.get('donor', {})
+                donor_name = donor_info.get('name', 'N/A') if donor_info else 'N/A'
+                donor_contact = donor_info.get('contact', 'N/A') if donor_info else 'N/A'
+                donor_email = donor_info.get('email', donor_contact if '@' in str(donor_contact) else 'N/A') if donor_info else 'N/A'
+                donor_phone = donor_info.get('phone', 'N/A') if donor_info else 'N/A'
+                
                 writer.writerow([
                     scholarship['name'],
                     f"${scholarship['amount']:,.2f}",
@@ -2260,7 +2403,11 @@ END OF LOG
                     scholarship['frequency'],
                     scholarship['description'],
                     '; '.join(scholarship['eligibility']),
-                    '; '.join(scholarship['requirements'])
+                    '; '.join(scholarship['requirements']),
+                    donor_name,
+                    donor_contact,
+                    donor_email,
+                    donor_phone
                 ])
         
         return output_path
@@ -3084,6 +3231,61 @@ def home(request):
         ]
     })
 
+    # Create additional diverse applicants
+    maria_garcia = Applicant.from_dict({
+        'name': "Maria Garcia",
+        'student_id': "87654321",
+        'netid': "mgarcia",
+        'major': "Computer Science",
+        'minor': "Mathematics",
+        'academic_achievements': [
+            {
+                'type': 'President\'s List',
+                'date': datetime(2024, 12, 15),
+                'description': 'Fall 2024 Semester'
+            }
+        ],
+        'financial_info': {
+            'fafsa_submitted': True,
+            'efc': 3000,
+            'household_income': '30000-50000'
+        },
+        'essays': [
+            {
+                'prompt': 'Leadership experience',
+                'content': 'As president of the Computer Science Club...',
+                'submission_date': datetime(2025, 2, 5)
+            }
+        ],
+        'gpa': 3.9,
+        'academic_level': "Senior",
+        'expected_graduation': datetime(2026, 5, 15)
+    })
+
+    sarah_johnson = Applicant.from_dict({
+        'name': "Sarah Johnson",
+        'student_id': "11223344",
+        'netid': "sjohnson",
+        'major': "Electrical Engineering",
+        'minor': "Physics",
+        'academic_achievements': [
+            {
+                'type': 'Research Award',
+                'date': datetime(2025, 1, 10),
+                'description': 'Outstanding Undergraduate Research'
+            }
+        ],
+        'financial_info': {
+            'fafsa_submitted': True,
+            'efc': 4500,
+            'household_income': '60000-80000'
+        },
+        'essays': [],
+        'gpa': 3.75,
+        'academic_level': "Junior",
+        'expected_graduation': datetime(2027, 5, 15)
+    })
+
     # Create sample scholarships
     # First scholarship with an award
     engineering_scholarship = Scholarship.objects.create(
@@ -3195,7 +3397,9 @@ def home(request):
         ],
         donor_info={
             'name': 'Tech Leaders Foundation',
-            'contact': 'foundation@techleaders.org'
+            'contact': 'foundation@techleaders.org',
+            'email': 'info@techleaders.org',
+            'phone': '555-0123'
         },
         disbursement_requirements=[
             "Maintain leadership position",
@@ -3203,8 +3407,67 @@ def home(request):
         ],
         frequency="semester",
         amount=3000.00,
-        deadline=timezone.make_aware(datetime(2026, 2, 1))
+        deadline=timezone.make_aware(datetime(2026, 2, 1)),
+        review_dates=[
+            timezone.make_aware(datetime(2026, 3, 1)).isoformat()
+        ],
+        reporting_schedule={
+            'Leadership Report': timezone.make_aware(datetime(2026, 5, 1)).isoformat()
+        }
     )
+    
+    # Create award for Maria Garcia for CS Leadership Scholarship
+    _cs_award_defaults = {
+        'award_date': timezone.make_aware(datetime(2025, 9, 1)),
+        'award_amount': 3000.00,
+        'disbursement_dates': [
+            timezone.make_aware(datetime(2025, 10, 1)).isoformat(),
+            timezone.make_aware(datetime(2026, 2, 15)).isoformat()
+        ],
+        'requirements_met': [
+            "Enrollment verification",
+            "Leadership position confirmed"
+        ],
+        'requirements_pending': [
+            "Mid-semester leadership report"
+        ],
+        'status': "active",
+        'performance_metrics': {
+            'current_gpa': 3.9,
+            'leadership_hours': 30
+        },
+        'essays_evaluation': [
+            {
+                'prompt': 'Leadership',
+                'score': 9.5,
+                'feedback': 'Exceptional leadership qualities'
+            }
+        ],
+        'interview_notes': "Outstanding leadership and communication skills",
+        'committee_feedback': [
+            {'member': 'Prof. Anderson', 'comments': 'Exemplary candidate'}
+        ]
+    }
+    
+    # Manage CS scholarship award for Maria Garcia
+    existing_cs_qs = ScholarshipAward.objects.filter(
+        scholarship_name=cs_scholarship.name,
+        applicant=maria_garcia
+    ).order_by('-award_date', '-id')
+
+    latest_cs = existing_cs_qs.first()
+    if latest_cs:
+        if existing_cs_qs.count() > 1:
+            existing_cs_qs.exclude(pk=latest_cs.pk).delete()
+        for k, v in _cs_award_defaults.items():
+            setattr(latest_cs, k, v)
+        latest_cs.save()
+    else:
+        ScholarshipAward.objects.create(
+            scholarship_name=cs_scholarship.name,
+            applicant=maria_garcia,
+            **_cs_award_defaults
+        )
     
     # Add scholarships to list for the engine
     sample_scholarships = [engineering_scholarship, cs_scholarship]
