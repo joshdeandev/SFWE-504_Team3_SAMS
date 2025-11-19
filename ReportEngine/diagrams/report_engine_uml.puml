@@ -1,0 +1,232 @@
+@startuml
+' Report Engine UML - generated from models.py
+hide empty members
+skinparam classAttributeIconSize 0
+
+package "reports_app" {
+
+class Applicant {
+  +id: int
+  +name: str
+  +student_id: str
+  +netid: str
+  +major: str
+  +minor: str
+  +gpa: float
+  +academic_level: str
+  +expected_graduation: date
+  +academic_achievements: JSON
+  +financial_info: JSON
+  +essays: JSON
+  +academic_history: JSON
+  +interview_notes: Text
+  +committee_feedback: JSON
+  +created_at: datetime
+  +updated_at: datetime
+  +from_dict(data): Applicant
+}
+
+class Scholarship {
+  +id: int
+  +name: str
+  +description: Text
+  +eligibility_criteria: JSON
+  +donor_info: JSON
+  +disbursement_requirements: JSON
+  +frequency: str
+  +amount: Decimal
+  +deadline: datetime
+  +review_dates: JSON
+  +reporting_schedule: JSON
+  +created_at: datetime
+  +updated_at: datetime
+  +from_dict(data): Scholarship
+}
+
+class ScholarshipAward {
+  +id: int
+  +scholarship_name: str
+  +applicant: Applicant (FK)
+  +award_date: datetime
+  +award_amount: Decimal
+  +disbursement_dates: JSON
+  +requirements_met: JSON
+  +requirements_pending: JSON
+  +status: enum
+  +performance_metrics: JSON
+  +essays_evaluation: JSON
+  +interview_notes: Text
+  +committee_feedback: JSON
+  +notes: Text
+  +created_at: datetime
+  +updated_at: datetime
+  +from_dataclass(data): ScholarshipAward
+}
+
+class ReviewerInformationRequest {
+  +id: int
+  +applicant: Applicant (FK)
+  +reviewer_name: str
+  +reviewer_email: Email
+  +scholarship_name: str
+  +request_type: str
+  +request_details: Text
+  +priority: enum
+  +status: enum
+  +requested_at: datetime
+  +fulfilled_at: datetime
+  +fulfillment_notes: Text
+  +mark_fulfilled(notes)
+}
+
+class AwardDecision {
+  +id: int
+  +applicant: Applicant (FK)
+  +scholarship_name: str
+  +decision: enum
+  +comments: Text
+  +decided_at: datetime
+  +updated_at: datetime
+  +record(applicant, scholarship_name, decision, comments)
+}
+
+class DisbursementTransaction {
+  +id: int
+  +scholarship_award: ScholarshipAward (FK)
+  +transaction_id: str
+  +external_transaction_id: str
+  +amount: Decimal
+  +scheduled_date: date
+  +processed_date: date
+  +status: enum
+  +financial_aid_system: str
+  +submission_payload: JSON
+  +response_data: JSON
+  +account_code: str
+  +fund_code: str
+  +error_message: Text
+  +retry_count: int
+  +last_retry_at: datetime
+  +created_at: datetime
+  +updated_at: datetime
+  +created_by: str
+  +updated_by: str
+  +notes: Text
+  +can_retry(): bool
+  +mark_submitted(external_id, system_name)
+  +mark_completed(processed_date)
+  +mark_failed(error_message)
+}
+
+class FinancialAidSystemLog {
+  +id: int
+  +system_name: str
+  +operation: str
+  +request_timestamp: datetime
+  +request_data: JSON
+  +response_data: JSON
+  +status: enum
+  +transaction: DisbursementTransaction (FK)
+  +error_message: Text
+  +http_status_code: int
+  +response_time_ms: int
+}
+
+class PaymentSchedule {
+  +id: int
+  +scholarship_award: ScholarshipAward (FK)
+  +payment_number: int
+  +scheduled_amount: Decimal
+  +scheduled_date: date
+  +conditions_met: bool
+  +required_conditions: JSON
+  +conditions_verified_at: datetime
+  +verified_by: str
+  +disbursement_transaction: DisbursementTransaction (1-1)
+  +status: enum
+  +notes: Text
+  +created_at: datetime
+  +updated_at: datetime
+  +verify_conditions(verified_by): bool
+  +create_disbursement_transaction(): DisbursementTransaction
+}
+
+}
+
+' ReportEngine class (service, not Django model)
+class ReportEngine {
+  -scholarships: list
+  +log_information_request(...): ReviewerInformationRequest
+  +_generate_information_request_log(request): str
+  +generate_donor_report(donor_name, start_date, end_date): dict
+  +export_donor_report_to_excel(donor_name, output_path, start_date, end_date): str
+  +export_donor_report_to_csv(...): str
+  +export_donor_report_to_pdf(...): str
+  +generate_disbursement_report(scholarship_name): dict
+  +generate_prescreening_report(applicants, scholarship_id): dict
+  +export_prescreening_report_to_pdf(...)
+  +export_prescreening_report_to_csv(...)
+  +export_prescreening_report_to_excel(...)
+  +generate_applicant_report(student_id, netid): dict
+  +generate_scholarship_report(filters): dict
+}
+
+' Relationships
+Applicant "1" <-- "*" ScholarshipAward : awards
+Applicant "1" <-- "*" ReviewerInformationRequest : information_requests
+Applicant "1" <-- "*" AwardDecision : award_decisions
+ScholarshipAward "1" <-- "*" PaymentSchedule : payment_schedules
+ScholarshipAward "1" <-- "*" DisbursementTransaction : disbursement_transactions
+DisbursementTransaction "0..1" <-- "*" FinancialAidSystemLog : system_logs
+PaymentSchedule "1" o-- "0..1" DisbursementTransaction : disbursement_transaction
+
+' ReportEngine uses models (dependency)
+ReportEngine ..> Applicant : uses
+ReportEngine ..> Scholarship : uses
+ReportEngine ..> ScholarshipAward : uses
+ReportEngine ..> ReviewerInformationRequest : uses
+ReportEngine ..> AwardDecision : uses
+ReportEngine ..> DisbursementTransaction : uses
+ReportEngine ..> PaymentSchedule : uses
+
+@enduml
+'' Views and URL endpoints
+package "views" {
+  class views_home {
+    +home(request): HttpResponse
+  }
+  class views_analytics {
+    +combined_analytics(request): HttpResponse
+  }
+  class views_request_info {
+    +request_information(request): HttpResponse
+  }
+  class views_award {
+    +award_scholarship(request): HttpResponse
+  }
+  class views_logs {
+    +view_request_logs(request): HttpResponse
+    +clear_request_logs(request): HttpResponse
+  }
+  class views_prescreening {
+    +view_prescreening_report(request): HttpResponse
+  }
+}
+
+' URL mappings (from `reports_app/urls.py`)
+"/" --> views_home : name=reports_home
+"/analytics/" --> views_analytics : name=analytics_dashboard
+"/request-information/" --> views_request_info : name=request_information
+"/view-request-logs/" --> views_logs : name=view_request_logs
+"/clear-request-logs/" --> views_logs : name=clear_request_logs
+"/award-decision/" --> views_award : name=award_scholarship
+"/prescreening-report/" --> views_prescreening : name=view_prescreening_report
+
+' Views use ReportEngine
+views_home ..> ReportEngine : uses
+views_analytics ..> ReportEngine : uses
+views_request_info ..> ReportEngine : uses
+views_award ..> ReportEngine : uses
+views_logs ..> ReportEngine : uses
+views_prescreening ..> ReportEngine : uses
+
