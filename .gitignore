@@ -1,3 +1,4 @@
 Place holder for things that need to not be pushed to repo.
 *.pyc
 information_request_logs/
+.idea/
