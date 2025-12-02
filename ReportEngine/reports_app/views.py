@@ -4425,20 +4425,30 @@ END OF LOG
 
         # Helper: unified applicant queryset filtered by date
         def _get_applicants():
+            """Get applicants with optional date filtering."""
             qs = Applicant.objects.all()
-            if start_date:
-                qs = qs.filter(created_at__gte=start_date)
-            if end_date:
-                qs = qs.filter(created_at__lte=end_date)
+            # Only apply date filtering if both date parameters are provided
+            if start_date and end_date:
+                try:
+                    qs = qs.filter(created_at__gte=start_date, created_at__lte=end_date)
+                except Exception as e:
+                    # If filtering fails, return all applicants
+                    logger.warning(f"Date filtering failed for applicants: {e}")
             return qs
 
         # Helper: unified awards queryset filtered by date
         def _get_awards():
+            """Get scholarship awards with optional date filtering."""
             qs = ScholarshipAward.objects.all()
-            if start_date:
-                qs = qs.filter(award_date__gte=start_date)
-            if end_date:
-                qs = qs.filter(award_date__lte=end_date)
+            # Only apply date filtering if both date parameters are provided
+            if start_date and end_date:
+                try:
+                    # Filter by award_date
+                    qs = qs.filter(award_date__gte=start_date.date() if hasattr(start_date, 'date') else start_date,
+                                 award_date__lte=end_date.date() if hasattr(end_date, 'date') else end_date)
+                except Exception as e:
+                    # If filtering fails, return all awards
+                    logger.warning(f"Date filtering failed for awards: {e}")
             return qs
 
         # 1) Application Trends (built from applicant report + queryset for efficiency distributions)
@@ -4447,8 +4457,12 @@ END OF LOG
 
             monthly = defaultdict(int)
             for a in applicants_qs:
-                if getattr(a, "created_at", None):
+                # Handle cases where created_at might not exist
+                if hasattr(a, 'created_at') and getattr(a, "created_at", None):
                     monthly[a.created_at.strftime("%Y-%m")] += 1
+                else:
+                    # Use current month as fallback
+                    monthly[timezone.now().strftime("%Y-%m")] += 1
 
             major_dist = list(
                 applicants_qs.values("major")
@@ -4523,102 +4537,377 @@ END OF LOG
     def export_analytics_report_to_excel(
         self, analytics_data: Dict[str, Any], output_path: str
     ) -> str:
-        """Export analytics report to an Excel workbook with basic sheets."""
+        """Export analytics report to an Excel workbook with formatted, readable sheets."""
         from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
 
         def _sheet(name: str) -> str:
             for c in ["\\", "/", "*", "?", ":", "[", "]"]:
                 name = name.replace(c, "-")
             return (name or "Sheet")[:31]
+        
+        def _format_header(ws, row=1):
+            """Apply header formatting to the first row."""
+            for cell in ws[row]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        def _auto_size_columns(ws):
+            """Auto-size columns based on content."""
+            for column in ws.columns:
+                max_length = 0
+                column_letter = get_column_letter(column[0].column)
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                ws.column_dimensions[column_letter].width = adjusted_width
 
         wb = Workbook()
+        
+        # Metadata sheet
         meta_ws = wb.active
         meta_ws.title = "Metadata"
         meta = analytics_data.get("metadata", {})
         meta_ws.append(["Field", "Value"])
+        _format_header(meta_ws)
         for k, v in meta.items():
-            meta_ws.append([k, str(v)])
+            meta_ws.append([k.replace("_", " ").title(), str(v)])
+        _auto_size_columns(meta_ws)
 
-        for section, data in analytics_data.items():
-            if section == "metadata":
-                continue
-            ws = wb.create_sheet(_sheet(section))
-            if isinstance(data, dict):
-                ws.append(["Key", "Value"])
-                for k, v in data.items():
-                    ws.append([k, str(v)])
-            elif isinstance(data, list):
-                ws.append(["Index", "Value"])
-                for i, v in enumerate(data):
-                    ws.append([i, str(v)])
-            else:
-                ws.append(["Value"])
-                ws.append([str(data)])
+        # Application Trends sheet
+        if "application_trends" in analytics_data:
+            app_data = analytics_data["application_trends"]
+            ws = wb.create_sheet("Application Trends")
+            
+            # Summary section
+            ws.append(["Application Trends Summary"])
+            ws.merge_cells('A1:B1')
+            ws['A1'].font = Font(bold=True, size=14)
+            ws.append([])
+            
+            ws.append(["Metric", "Value"])
+            _format_header(ws, row=3)
+            ws.append(["Total Applications", app_data.get("total_applications", 0)])
+            
+            # GPA Statistics
+            gpa_stats = app_data.get("gpa_statistics", {})
+            if gpa_stats:
+                ws.append([])
+                ws.append(["GPA Statistics", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Average GPA", f"{gpa_stats.get('avg_gpa', 0):.2f}" if gpa_stats.get('avg_gpa') else "N/A"])
+                ws.append(["Minimum GPA", f"{gpa_stats.get('min_gpa', 0):.2f}" if gpa_stats.get('min_gpa') else "N/A"])
+                ws.append(["Maximum GPA", f"{gpa_stats.get('max_gpa', 0):.2f}" if gpa_stats.get('max_gpa') else "N/A"])
+            
+            # Monthly Trends
+            monthly = app_data.get("monthly_trends", {})
+            if monthly:
+                ws.append([])
+                ws.append(["Monthly Trends", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Month", "Applications"])
+                _format_header(ws, row=ws.max_row)
+                for month, count in sorted(monthly.items()):
+                    ws.append([month, count])
+            
+            # Major Distribution
+            major_dist = app_data.get("major_distribution", [])
+            if major_dist:
+                ws.append([])
+                ws.append(["Major Distribution", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Major", "Count"])
+                _format_header(ws, row=ws.max_row)
+                for item in major_dist:
+                    ws.append([item.get("major", "Unknown"), item.get("count", 0)])
+            
+            # Academic Level Distribution
+            level_dist = app_data.get("academic_level_distribution", [])
+            if level_dist:
+                ws.append([])
+                ws.append(["Academic Level Distribution", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Level", "Count"])
+                _format_header(ws, row=ws.max_row)
+                for item in level_dist:
+                    ws.append([item.get("academic_level", "Unknown"), item.get("count", 0)])
+            
+            _auto_size_columns(ws)
+
+        # Scholarship Impact sheet
+        if "scholarship_impact" in analytics_data:
+            schol_data = analytics_data["scholarship_impact"]
+            ws = wb.create_sheet("Scholarship Impact")
+            
+            # Summary section
+            ws.append(["Scholarship Impact Summary"])
+            ws.merge_cells('A1:B1')
+            ws['A1'].font = Font(bold=True, size=14)
+            ws.append([])
+            
+            ws.append(["Metric", "Value"])
+            _format_header(ws, row=3)
+            ws.append(["Total Awards", schol_data.get("total_awards", 0)])
+            
+            # Financial Impact
+            financial = schol_data.get("financial_impact", {})
+            if financial:
+                ws.append([])
+                ws.append(["Financial Impact", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Total Awarded", f"${financial.get('total_awarded', 0):,.2f}" if financial.get('total_awarded') else "$0.00"])
+                ws.append(["Average Award", f"${financial.get('avg_award', 0):,.2f}" if financial.get('avg_award') else "$0.00"])
+                ws.append(["Minimum Award", f"${financial.get('min_award', 0):,.2f}" if financial.get('min_award') else "$0.00"])
+                ws.append(["Maximum Award", f"${financial.get('max_award', 0):,.2f}" if financial.get('max_award') else "$0.00"])
+            
+            # Scholarship Breakdown
+            schol_breakdown = schol_data.get("scholarship_breakdown", [])
+            if schol_breakdown:
+                ws.append([])
+                ws.append(["Scholarship Breakdown", "", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Scholarship Name", "Count", "Total Amount"])
+                _format_header(ws, row=ws.max_row)
+                for item in schol_breakdown:
+                    ws.append([
+                        item.get("scholarship_name", "Unknown"),
+                        item.get("count", 0),
+                        f"${item.get('total_amount', 0):,.2f}" if item.get('total_amount') else "$0.00"
+                    ])
+            
+            # Status Distribution
+            status_dist = schol_data.get("status_distribution", [])
+            if status_dist:
+                ws.append([])
+                ws.append(["Status Distribution", ""])
+                ws['A{}'.format(ws.max_row)].font = Font(bold=True)
+                ws.append(["Status", "Count"])
+                _format_header(ws, row=ws.max_row)
+                for item in status_dist:
+                    ws.append([item.get("status", "Unknown"), item.get("count", 0)])
+            
+            _auto_size_columns(ws)
+
         wb.save(output_path)
         return output_path
 
     def export_analytics_report_to_pdf(
         self, analytics_data: Dict[str, Any], output_path: str
     ) -> str:
-        """Export analytics to a simple PDF summary."""
+        """Export analytics to a formatted, readable PDF report."""
         from reportlab.platypus import (
             SimpleDocTemplate,
             Paragraph,
             Table,
             TableStyle,
             Spacer,
+            PageBreak,
         )
-        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
         doc = SimpleDocTemplate(output_path, pagesize=letter)
         styles = getSampleStyleSheet()
+        
+        # Custom styles
+        styles.add(ParagraphStyle(
+            name='CenterTitle',
+            parent=styles['Title'],
+            alignment=TA_CENTER,
+        ))
+        styles.add(ParagraphStyle(
+            name='SectionHeader',
+            parent=styles['Heading2'],
+            textColor=colors.HexColor('#1F4788'),
+            spaceAfter=12,
+        ))
+        
         story = [
-            Paragraph("Scholarship Analytics Report", styles["Title"]),
-            Spacer(1, 12),
+            Paragraph("Scholarship Analytics Report", styles["CenterTitle"]),
+            Spacer(1, 20),
         ]
 
+        # Metadata section
         meta = analytics_data.get("metadata", {})
         if meta:
-            story.append(Paragraph("Metadata", styles["Heading2"]))
-            rows = [["Field", "Value"]] + [[k, str(v)] for k, v in meta.items()]
-            t = Table(rows)
+            story.append(Paragraph("Report Information", styles["SectionHeader"]))
+            rows = [["Field", "Value"]]
+            for k, v in meta.items():
+                rows.append([k.replace("_", " ").title(), str(v)])
+            
+            t = Table(rows, colWidths=[200, 300])
             t.setStyle(
                 TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, 0), 12),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                        ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
                     ]
                 )
             )
             story.append(t)
-            story.append(Spacer(1, 12))
+            story.append(Spacer(1, 20))
 
-        for section, data in analytics_data.items():
-            if section == "metadata":
-                continue
-            story.append(
-                Paragraph(section.replace("_", " ").title(), styles["Heading2"])
-            )
-            rows = [["Key", "Value"]]
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    rows.append([str(k), str(v)])
-            else:
-                rows.append(["value", str(data)])
-            t = Table(rows)
+        # Application Trends section
+        if "application_trends" in analytics_data:
+            app_data = analytics_data["application_trends"]
+            story.append(Paragraph("Application Trends", styles["SectionHeader"]))
+            
+            # Summary table
+            rows = [["Metric", "Value"]]
+            rows.append(["Total Applications", str(app_data.get("total_applications", 0))])
+            
+            gpa_stats = app_data.get("gpa_statistics", {})
+            if gpa_stats:
+                rows.append(["Average GPA", f"{gpa_stats.get('avg_gpa', 0):.2f}" if gpa_stats.get('avg_gpa') else "N/A"])
+                rows.append(["Minimum GPA", f"{gpa_stats.get('min_gpa', 0):.2f}" if gpa_stats.get('min_gpa') else "N/A"])
+                rows.append(["Maximum GPA", f"{gpa_stats.get('max_gpa', 0):.2f}" if gpa_stats.get('max_gpa') else "N/A"])
+            
+            t = Table(rows, colWidths=[250, 250])
             t.setStyle(
                 TableStyle(
                     [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
                         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, 0), 11),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
                     ]
                 )
             )
             story.append(t)
-            story.append(Spacer(1, 18))
+            story.append(Spacer(1, 15))
+            
+            # Major Distribution
+            major_dist = app_data.get("major_distribution", [])
+            if major_dist:
+                story.append(Paragraph("Major Distribution", styles["Heading3"]))
+                rows = [["Major", "Count"]]
+                for item in major_dist[:10]:  # Limit to top 10
+                    rows.append([item.get("major", "Unknown"), str(item.get("count", 0))])
+                
+                t = Table(rows, colWidths=[350, 150])
+                t.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#70AD47')),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                        ]
+                    )
+                )
+                story.append(t)
+                story.append(Spacer(1, 20))
+
+        # Scholarship Impact section
+        if "scholarship_impact" in analytics_data:
+            story.append(PageBreak())
+            schol_data = analytics_data["scholarship_impact"]
+            story.append(Paragraph("Scholarship Impact", styles["SectionHeader"]))
+            
+            # Summary table
+            rows = [["Metric", "Value"]]
+            rows.append(["Total Awards", str(schol_data.get("total_awards", 0))])
+            
+            financial = schol_data.get("financial_impact", {})
+            if financial:
+                rows.append(["Total Awarded", f"${financial.get('total_awarded', 0):,.2f}" if financial.get('total_awarded') else "$0.00"])
+                rows.append(["Average Award", f"${financial.get('avg_award', 0):,.2f}" if financial.get('avg_award') else "$0.00"])
+                rows.append(["Minimum Award", f"${financial.get('min_award', 0):,.2f}" if financial.get('min_award') else "$0.00"])
+                rows.append(["Maximum Award", f"${financial.get('max_award', 0):,.2f}" if financial.get('max_award') else "$0.00"])
+            
+            t = Table(rows, colWidths=[250, 250])
+            t.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#4472C4')),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, 0), 11),
+                        ("BOTTOMPADDING", (0, 0), (-1, 0), 10),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                    ]
+                )
+            )
+            story.append(t)
+            story.append(Spacer(1, 15))
+            
+            # Scholarship Breakdown
+            schol_breakdown = schol_data.get("scholarship_breakdown", [])
+            if schol_breakdown:
+                story.append(Paragraph("Scholarship Breakdown", styles["Heading3"]))
+                rows = [["Scholarship Name", "Count", "Total Amount"]]
+                for item in schol_breakdown:
+                    rows.append([
+                        item.get("scholarship_name", "Unknown"),
+                        str(item.get("count", 0)),
+                        f"${item.get('total_amount', 0):,.2f}" if item.get('total_amount') else "$0.00"
+                    ])
+                
+                t = Table(rows, colWidths=[250, 100, 150])
+                t.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#70AD47')),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
+                            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                        ]
+                    )
+                )
+                story.append(t)
+                story.append(Spacer(1, 15))
+            
+            # Status Distribution
+            status_dist = schol_data.get("status_distribution", [])
+            if status_dist:
+                story.append(Paragraph("Status Distribution", styles["Heading3"]))
+                rows = [["Status", "Count"]]
+                for item in status_dist:
+                    rows.append([item.get("status", "Unknown"), str(item.get("count", 0))])
+                
+                t = Table(rows, colWidths=[350, 150])
+                t.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor('#FFC000')),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+                        ]
+                    )
+                )
+                story.append(t)
 
         doc.build(story)
         return output_path
@@ -5353,8 +5642,43 @@ def combined_analytics(request):
             logger.error(f"Combined analytics export failed: {e}")
             errors.append(f"Export failed: {e}")
 
+    # Format analytics data for template display (create a copy to avoid modifying original)
+    analytics_display = None
+    if analytics:
+        import json
+        from datetime import date
+        from decimal import Decimal
+        
+        def _json_serializer(obj):
+            """Custom JSON serializer for datetime and Decimal objects."""
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            return str(obj)
+        
+        # Create a copy for display formatting
+        analytics_display = {}
+        
+        # Format each section as pretty JSON
+        if "application_trends" in analytics:
+            analytics_display["application_trends"] = json.dumps(
+                analytics["application_trends"], indent=2, default=_json_serializer
+            )
+        if "scholarship_impact" in analytics:
+            analytics_display["scholarship_impact"] = json.dumps(
+                analytics["scholarship_impact"], indent=2, default=_json_serializer
+            )
+        if "metadata" in analytics:
+            analytics_display["metadata"] = analytics["metadata"]
+        
+        # Also format the full analytics for the raw JSON display
+        analytics_display["raw_json"] = json.dumps(
+            analytics, indent=2, default=_json_serializer
+        )
+
     context = {
-        "analytics": analytics,
+        "analytics": analytics_display,
         "errors": errors,
         "form": {
             "start_date": start_raw or "",
@@ -5362,6 +5686,7 @@ def combined_analytics(request):
             "export_format": export_format or "",
         },
     }
+    
     return render(request, "reports_app/combined_analytics.html", context)
 
 
