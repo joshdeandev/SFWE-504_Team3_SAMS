@@ -695,6 +695,8 @@
                 'pending': '<span style="color: #ffc107;"><i class="fa fa-clock-o"></i> PENDING</span>'
             };
             
+            console.log('Opening award modal:', {applicantId, scholarshipName, decision, applicantName});
+            
             document.getElementById('applicant_id').value = applicantId;
             document.getElementById('decision').value = decision;
             document.getElementById('applicant_name').textContent = applicantName;
@@ -702,16 +704,34 @@
             
             // Set the scholarship dropdown to the current scholarship
             const scholarshipSelect = document.getElementById('scholarship_name');
-            scholarshipSelect.value = scholarshipName;
-            
-            // Update default option text to show which scholarship the applicant qualified for
             const defaultOption = document.getElementById('default_scholarship_option');
+            
+            // Clear any previous selection first
+            scholarshipSelect.selectedIndex = 0;
+            
+            // Update default option text and try to find matching scholarship
             if (scholarshipName) {
                 defaultOption.textContent = scholarshipName + ' (Qualified) - or select another';
-                defaultOption.value = scholarshipName;
+                
+                // Try to find and select the matching option
+                let optionFound = false;
+                for (let i = 0; i < scholarshipSelect.options.length; i++) {
+                    const option = scholarshipSelect.options[i];
+                    if (option.value === scholarshipName) {
+                        scholarshipSelect.selectedIndex = i;
+                        optionFound = true;
+                        console.log('Scholarship option found and selected:', scholarshipName);
+                        break;
+                    }
+                }
+                
+                if (!optionFound) {
+                    console.warn('Scholarship option not found in dropdown:', scholarshipName);
+                    console.log('Available options:', Array.from(scholarshipSelect.options).map(o => o.value));
+                }
             } else {
                 defaultOption.textContent = 'Select Scholarship';
-                defaultOption.value = '';
+                scholarshipSelect.selectedIndex = 0;
             }
             
             // Show award amount and create award checkbox only for 'awarded' decision
@@ -791,9 +811,39 @@
             }
         }
         
-        // Handle form submission
+        // Handle form submission with validation
         document.getElementById('awardForm').addEventListener('submit', function(e) {
-            // Form will submit normally, but we could add validation here if needed
+            const scholarshipSelect = document.getElementById('scholarship_name');
+            const applicantId = document.getElementById('applicant_id').value;
+            const decision = document.getElementById('decision').value;
+            
+            console.log('Form submission - Scholarship selected:', scholarshipSelect.value);
+            console.log('Form data:', {
+                applicant_id: applicantId,
+                scholarship_name: scholarshipSelect.value,
+                decision: decision,
+                comments: document.getElementById('comments').value
+            });
+            
+            if (!scholarshipSelect.value) {
+                e.preventDefault();
+                alert('Please select a scholarship before submitting.');
+                return false;
+            }
+            // Form will submit normally
+            console.log('Form validated, submitting...');
+            return true;
+        });
+        
+        document.getElementById('scholarshipAwardForm').addEventListener('submit', function(e) {
+            const applicantSelect = document.getElementById('applicant_select');
+            if (!applicantSelect.value) {
+                e.preventDefault();
+                alert('Please select an applicant before submitting.');
+                return false;
+            }
+            // Form will submit normally
+            return true;
         });
     </script>
 </body>

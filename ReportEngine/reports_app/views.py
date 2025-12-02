@@ -5499,33 +5499,49 @@ def award_scholarship(request):
       - award_amount (optional, defaults to Scholarship.amount if found)
     """
     if request.method != "POST":
+        logger.error("award_scholarship called with non-POST method")
         return HttpResponse("Method Not Allowed", status=405)
 
+    student_id = request.POST.get("applicant_id")
+    scholarship_name = request.POST.get("scholarship_name")
+    decision = request.POST.get("decision", "pending")
+    comments = request.POST.get("comments")
+    create_award_flag = request.POST.get("create_award") == "yes"
+    award_amount_input = request.POST.get("award_amount")
+
+    logger.info(f"=== Award Scholarship Request ===")
+    logger.info(f"Student ID: {student_id}")
+    logger.info(f"Scholarship Name: {scholarship_name}")
+    logger.info(f"Decision: {decision}")
+    logger.info(f"Comments: {comments}")
+    logger.info(f"Create Award: {create_award_flag}")
+    logger.info(f"Award Amount: {award_amount_input}")
+    logger.info(f"All POST data: {dict(request.POST)}")
+
+    if not student_id or not scholarship_name:
+        logger.error("Missing applicant_id or scholarship_name")
+        return HttpResponse("Missing applicant_id or scholarship_name", status=400)
+
     try:
-        student_id = request.POST.get("applicant_id")
-        scholarship_name = request.POST.get("scholarship_name")
-        decision = request.POST.get("decision", "pending")
-        comments = request.POST.get("comments")
-        create_award_flag = request.POST.get("create_award") == "yes"
-        award_amount_input = request.POST.get("award_amount")
+        applicant = Applicant.objects.get(student_id=student_id)
+    except Applicant.DoesNotExist:
+        logger.error(f"Applicant with student_id {student_id} not found")
+        return HttpResponse(
+            f"Applicant with student_id {student_id} not found", status=404
+        )
+    except Exception as e:
+        logger.error(f"Error finding applicant: {e}")
+        return HttpResponse(f"Error finding applicant: {str(e)}", status=500)
 
-        if not student_id or not scholarship_name:
-            return HttpResponse("Missing applicant_id or scholarship_name", status=400)
-
-        try:
-            applicant = Applicant.objects.get(student_id=student_id)
-        except Applicant.DoesNotExist:
-            return HttpResponse(
-                f"Applicant with student_id {student_id} not found", status=404
-            )
-
+    try:
         # Record decision
-        AwardDecision.record(
+        award_decision = AwardDecision.record(
             applicant=applicant,
             scholarship_name=scholarship_name,
             decision=decision,
             comments=comments,
         )
+        logger.info(f"Award decision recorded: {award_decision}")
 
         # Optionally create ScholarshipAward if decision is awarded
         if decision == "awarded" and create_award_flag:
@@ -5543,7 +5559,7 @@ def award_scholarship(request):
                 Decimal(award_amount_input) if award_amount_input else default_amount
             )
 
-            ScholarshipAward.objects.create(
+            scholarship_award = ScholarshipAward.objects.create(
                 scholarship_name=scholarship_name,
                 applicant=applicant,
                 award_date=now,
@@ -5555,6 +5571,7 @@ def award_scholarship(request):
                 performance_metrics={},
                 notes=comments,
             )
+            logger.info(f"ScholarshipAward created: {scholarship_award}")
 
         # Provide user feedback via messages (if messages framework installed)
         try:
@@ -5570,14 +5587,15 @@ def award_scholarship(request):
                 request,
                 f"Scholarship '{scholarship_name}' {action_phrase} for applicant {applicant.name}.",
             )
-        except Exception:
-            pass
+        except Exception as msg_error:
+            logger.warning(f"Could not add success message: {msg_error}")
 
         # Redirect back to prescreening report
+        logger.debug("Redirecting to view_prescreening_report")
         return redirect("view_prescreening_report")
 
     except Exception as e:
-        logger.error(f"Error recording award decision: {e}")
+        logger.error(f"Error recording award decision: {e}", exc_info=True)
         return HttpResponse(f"Error: {str(e)}", status=500)
 
 
